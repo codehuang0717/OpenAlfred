@@ -1,28 +1,17 @@
+import uuid
+from typing import Optional, Literal
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from langchain.tools import ToolRuntime, tool
 from langchain.messages import ToolMessage
 from langgraph.types import Command
-from typing import TypedDict, Literal, Optional
-import uuid
-from datetime import datetime, timezone
-
+from schema import AgentState, TodoDict
 from database import (
     get_all_todos,
     add_todo as db_add_todo,
     update_todo as db_update_todo,
     delete_todo as db_delete_todo,
-    TodoDict,
 )
-
-
-class AgentState(BaseModel):
-    todos: list[TodoDict]
-    mem0_user_id: str
-    tts_text: Optional[str]
-    jump_to: str
-    structured_response: dict
-    model_selection: Optional[str]
-    chat_session_id: Optional[str]
 
 
 async def initialize_todos(state: AgentState) -> dict:

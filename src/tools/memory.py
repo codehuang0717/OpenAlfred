@@ -1,11 +1,8 @@
-# src/tools/memory.py
-from dotenv import load_dotenv
+from config import config
 from langchain.tools import tool, ToolRuntime
-
 from mem0 import MemoryClient
 
-load_dotenv()
-mem0_client = MemoryClient()
+mem0_client = MemoryClient(api_key=config.MEM0_API_KEY)
 
 
 @tool

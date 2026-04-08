@@ -4,14 +4,12 @@ import logging
 import io
 import wave
 import httpx
-import dotenv
 import collections
 import os
 import uuid
 import time
 from datetime import datetime
-
-dotenv.load_dotenv(override=True)
+from config import config
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad
 from livekit.plugins import silero
@@ -31,10 +29,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("livekit-worker")
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-os.environ["LIVEKIT_URL"] = "ws://34.58.12.77:7880"
-os.environ.setdefault("LIVEKIT_API_KEY", "devkey")
-os.environ.setdefault("LIVEKIT_API_SECRET", "secret")
 
 db_initialized = False
 
@@ -147,7 +141,7 @@ async def text_to_speech(text: str) -> bytes:
         import dashscope
         from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
 
-        dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
+        dashscope.api_key = config.OPENAI_API_KEY # Assuming same key
         voice_id = os.getenv("VOICE_ID")
         if not voice_id:
             logger.error("VOICE_ID not set")
@@ -158,7 +152,8 @@ async def text_to_speech(text: str) -> bytes:
             voice=voice_id,
             format=AudioFormat.PCM_48000HZ_MONO_16BIT,
         )
-        audio_data = synthesizer.call(text)
+        # Running in separate thread if call is blocking
+        audio_data = await asyncio.to_thread(synthesizer.call, text)
         return audio_data if audio_data else b""
     except Exception as e:
         logger.error(f"CosyVoice TTS Error: {e}")
@@ -207,7 +202,8 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
 
 
 async def play_greeting(room: rtc.Room):
-    wav_path = os.path.join(os.path.dirname(__file__), "greeting.wav")
+    # Updated greeting path to assets/
+    wav_path = str(config.ASSETS_DIR / "greeting.wav")
     if "outbound-reminder-" in room.name:
         start_idx = room.name.find("outbound-reminder-") + len("outbound-reminder-")
         reminder_id = room.name[start_idx : start_idx + 36]

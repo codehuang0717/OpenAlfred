@@ -1,31 +1,12 @@
 import aiosqlite
-from typing import Optional, TypedDict, Literal
-from datetime import datetime, timezone
-
-
-class TodoDict(TypedDict):
-    id: str
-    title: str
-    description: str
-    emoji: str
-    status: Literal["pending", "completed"]
-    created_at: str
-    completed_at: Optional[str]
-    deleted: int
-    notes: str
-    expected_completion_at: Optional[str]
-
-
 import os
+from typing import Optional, Literal
+from datetime import datetime, timezone
+from schema import TodoDict
+from config import config
 
-DATABASE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "todos.db"
-)
-
-# 定义全局统一的音频缓存目录
-AUDIO_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio_cache"
-)
+DATABASE_PATH = str(config.DB_PATH)
+AUDIO_CACHE_DIR = str(config.ASSETS_DIR / "audio_cache")
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 
@@ -115,6 +96,17 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE reminders ADD COLUMN audio_path TEXT DEFAULT ''"
             )
+        except Exception:
+            pass
+
+        # Bark fields migrations
+        for col in ["title", "subtitle", "sound"]:
+            try:
+                await db.execute(f"ALTER TABLE reminders ADD COLUMN {col} TEXT")
+            except Exception:
+                pass
+        try:
+            await db.execute("ALTER TABLE reminders ADD COLUMN level TEXT DEFAULT 'active'")
         except Exception:
             pass
 

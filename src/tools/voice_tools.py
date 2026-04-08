@@ -18,6 +18,7 @@ from database import (
     get_all_reminders,
     delete_reminder,
 )
+from config import config
 
 
 # ─── Todo Tools ───────────────────────────────────────────────────────────────
@@ -67,32 +68,37 @@ async def voice_add_reminder(
     scheduled_at: str,
     delivery_method: Literal["push", "call"] = "push",
     call_greeting: Optional[str] = None,
+    title: Optional[str] = None,
+    subtitle: Optional[str] = None,
+    level: str = "active",
+    sound: Optional[str] = None,
 ) -> str:
     """
-    设置提醒。可直接传入相对时间（如"10秒"、"半小时"、"2小时"）或绝对时间（如"15:30"），会自动转换。
-
+    设置提醒。
+    
     Args:
         body: 提醒内容
-        scheduled_at: 时间字符串
+        scheduled_at: 绝对 ISO 8601 时间字符串 (必须)。基于当前时间计算。
         delivery_method: "push" 推送通知 或 "call" 电话提醒
         call_greeting: 电话提醒时需要播放的问候语内容
+        title: 提醒标题 (可选)
+        subtitle: 提醒副标题 (可选)
+        level: 推送优先级
+        sound: 推送声音
     """
-    from tools.reminder import parse_absolute_time, parse_relative_time_cn, pre_render_tts
-    import os
+    from tools.reminder import pre_render_tts
 
     try:
         reminder_id = str(uuid.uuid4())
-        now_uk = datetime.now(ZoneInfo("Europe/London"))
+        
+        # 解析 ISO 时间
+        try:
+            dt_with_tz = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
+        except ValueError:
+            dt_naive = datetime.fromisoformat(scheduled_at)
+            dt_with_tz = dt_naive.replace(tzinfo=ZoneInfo("Europe/London"))
 
-        abs_dt = parse_absolute_time(scheduled_at)
-        if abs_dt is not None:
-            dt_uk = abs_dt.replace(tzinfo=ZoneInfo("Europe/London"))
-        else:
-            dt_uk = parse_relative_time_cn(scheduled_at, now_uk)
-            if dt_uk.tzinfo is None:
-                dt_uk = dt_uk.replace(tzinfo=ZoneInfo("Europe/London"))
-
-        dt_utc = dt_uk.astimezone(ZoneInfo("UTC"))
+        dt_utc = dt_with_tz.astimezone(ZoneInfo("UTC"))
         final_time_utc = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         audio_path = ""
@@ -106,6 +112,10 @@ async def voice_add_reminder(
             scheduled_at=final_time_utc,
             delivery_method=delivery_method,
             audio_path=audio_path,
+            title=title,
+            subtitle=subtitle,
+            level=level,
+            sound=sound,
         )
         return f"提醒已设置: {body}，时间 {final_time_utc}"
     except Exception as e:
@@ -155,10 +165,9 @@ def voice_search_memory(query: str) -> str:
         query: 搜索关键词
     """
     from mem0 import MemoryClient
-    import os
-
     try:
-        client = MemoryClient()
+        from mem0 import MemoryClient
+        client = MemoryClient(api_key=config.MEM0_API_KEY)
         results = client.search(query, user_id="default")
         if results and isinstance(results, dict):
             results = results.get("results", results)
@@ -180,7 +189,7 @@ def voice_add_memory(content: str) -> str:
     from mem0 import MemoryClient
 
     try:
-        client = MemoryClient()
+        client = MemoryClient(api_key=config.MEM0_API_KEY)
         messages = [{"role": "user", "content": content}]
         result = client.add(messages=messages, user_id="default")
         return f"已记住: {content}"
@@ -204,7 +213,7 @@ async def voice_make_outbound_call(phone_number: str = "100") -> str:
 
     try:
         jwt_token = generate_sip_token()
-        api_url = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+        api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
         if api_url.endswith("/"):
             api_url = api_url[:-1]
         url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"

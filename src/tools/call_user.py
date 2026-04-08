@@ -8,13 +8,10 @@ from langchain.tools import ToolRuntime
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 
+from config import config
+
 logger = logging.getLogger("call-user-tool")
 
-# 从环境变量获取配置
-API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
-API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
-# 这里确保使用 HTTP 协议地址
-LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "http://34.58.12.77:7880")
 # 最新的云端 Outbound Trunk ID
 OUTBOUND_TRUNK_ID = "ST_Bcj2LDXqL4J7"
 
@@ -23,13 +20,13 @@ def generate_sip_token():
     """根据 LiveKit 官方规范生成 SIP 专用 Token"""
     now = int(time.time())
     payload = {
-        "iss": API_KEY,
+        "iss": config.LIVEKIT_API_KEY,
         "iat": now,
         "nbf": now - 60,  # 提前一分钟防止服务器时间误差
         "exp": now + 3600,
         "sip": {"admin": True, "call": True},
     }
-    return pyjwt.encode(payload, API_SECRET, algorithm="HS256")
+    return pyjwt.encode(payload, config.LIVEKIT_API_SECRET, algorithm="HS256")
 
 
 @tool
@@ -50,7 +47,7 @@ async def make_outbound_call(
     }
 
     # 修正后的 LiveKit SIP 官方 API 路径
-    api_url = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+    api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
     if api_url.endswith("/"):
         api_url = api_url[:-1]
 
