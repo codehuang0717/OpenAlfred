@@ -1,5 +1,5 @@
-# src/schema.py
-from typing import Annotated, Optional, TypedDict, Literal
+from typing import Annotated, Optional, Literal
+from typing_extensions import TypedDict
 from pydantic import BaseModel
 from langgraph.graph.message import add_messages
 

@@ -1,3 +1,12 @@
+# Runtime Monkey Patch to fix opentelemetry compatibility with livekit-agents
+import opentelemetry.sdk._logs as sdk_logs
+if not hasattr(sdk_logs, "LogData"):
+    class LogData:
+        def __init__(self, log_record, instrumentation_scope):
+            self.log_record = log_record
+            self.instrumentation_scope = instrumentation_scope
+    sdk_logs.LogData = LogData
+
 import asyncio
 import json
 import logging
@@ -15,7 +24,6 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad
 from livekit.plugins import silero
 from livekit import rtc
 from agent_graph import voice_graph
-from tools.reminder import check_and_send_pending_reminders
 from database import (
     AUDIO_CACHE_DIR,
     init_db,
@@ -265,26 +273,12 @@ async def play_greeting(room: rtc.Room):
         await room.local_participant.unpublish_track(publication.sid)
 
 
-async def reminder_scheduler():
-    logger.info("Global reminder scheduler started.")
-    while True:
-        try:
-            await check_and_send_pending_reminders()
-        except Exception as e:
-            logger.error(f"Scheduler error: {e}")
-        await asyncio.sleep(30)
-
 
 async def entrypoint(ctx: JobContext):
     global db_initialized
     if not db_initialized:
         await init_db()
         db_initialized = True
-
-    if not hasattr(cli, "_reminder_started"):
-        logger.info("Starting reminder scheduler in job process...")
-        asyncio.create_task(reminder_scheduler())
-        cli._reminder_started = True
 
     await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
     room = ctx.room
