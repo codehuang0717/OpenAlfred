@@ -37,4 +37,11 @@ class Config:
     CLOUD_MODEL_NAME = os.getenv("CLOUD_MODEL_NAME", "gpt-5.4-mini") # Use a real name by default
     BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
+    # TTS Settings (Faster-Qwen3-TTS)
+    TTS_URL = os.getenv("TTS_URL", "http://localhost:7017/v1/audio/speech")
+    TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
+    TTS_VOICE = os.getenv("TTS_VOICE", "yingxue")
+    TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
+    TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "120"))
+
 config = Config()

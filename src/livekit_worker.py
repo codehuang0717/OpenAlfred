@@ -24,6 +24,7 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad
 from livekit.plugins import silero
 from livekit import rtc
 from agent_graph import voice_graph
+from tts import get_tts_stream
 from database import (
     AUDIO_CACHE_DIR,
     init_db,
@@ -144,28 +145,7 @@ async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -
         return ""
 
 
-async def text_to_speech(text: str) -> bytes:
-    try:
-        import dashscope
-        from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
-
-        dashscope.api_key = config.OPENAI_API_KEY # Assuming same key
-        voice_id = os.getenv("VOICE_ID")
-        if not voice_id:
-            logger.error("VOICE_ID not set")
-            return b""
-
-        synthesizer = SpeechSynthesizer(
-            model="cosyvoice-v3.5-flash",
-            voice=voice_id,
-            format=AudioFormat.PCM_48000HZ_MONO_16BIT,
-        )
-        # Running in separate thread if call is blocking
-        audio_data = await asyncio.to_thread(synthesizer.call, text)
-        return audio_data if audio_data else b""
-    except Exception as e:
-        logger.error(f"CosyVoice TTS Error: {e}")
-        return b""
+# Removed old text_to_speech function to use streaming src/tts.py
 
 
 async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
@@ -174,39 +154,74 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
     track = rtc.LocalAudioTrack.create_audio_track("tts", source)
     publication = await room.local_participant.publish_track(track)
     try:
-        audio_data = await text_to_speech(text)
-        latency_tracker.end("tts_generate")
-        if not audio_data:
-            return
-        latency_tracker.start("tts_playback")
-        import numpy as np
+        latency_tracker.start("tts_first_chunk")
+        first_chunk_found = False
+        
+        jitter_buffer_bytes = b""
+        # Using 250ms as the stable default for RTX 2060
+        jitter_threshold_bytes = int(48000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
+        playback_started = False
+        total_samples_pushed = 0
+        start_time = 0
 
-        audio_np = np.frombuffer(audio_data, dtype=np.int16)
+        async for audio_chunk in get_tts_stream(text, target_sample_rate=48000):
+            if not first_chunk_found:
+                latency_tracker.end("tts_first_chunk")
+                latency_tracker.end("tts_generate")
+                first_chunk_found = True
+            
+            jitter_buffer_bytes += audio_chunk
+            
+            # Start playing once jitter buffer threshold is reached
+            if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
+                latency_tracker.start("tts_playback")
+                latency_tracker.start("tts_audio_stream")
+                playback_started = True
+                start_time = time.time()
+            
+            if playback_started:
+                import numpy as np
+                audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
+                jitter_buffer_bytes = b"" 
+                
+                chunk_size = 1920 
+                for i in range(0, len(audio_np), chunk_size):
+                    chunk = audio_np[i : i + chunk_size]
+                    if len(chunk) > 0:
+                        frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
+                        await source.capture_frame(frame)
+                        total_samples_pushed += len(chunk)
+                await asyncio.sleep(0.01)
 
-        duration = len(audio_np) / 48000
-        latency_tracker.start("tts_audio_stream")
-        chunk_size = 1920
-        for i in range(0, len(audio_np), chunk_size):
-            chunk = audio_np[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(
-                    data=chunk.tobytes(),
-                    sample_rate=48000,
-                    num_channels=1,
-                    samples_per_channel=len(chunk),
-                )
+        # Final cleanup for remaining small chunks
+        if jitter_buffer_bytes:
+            if not playback_started:
+                playback_started = True
+                start_time = time.time()
+            import numpy as np
+            audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
+            for i in range(0, len(audio_np), 1920):
+                chunk = audio_np[i : i + 1920]
+                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
                 await source.capture_frame(frame)
+                total_samples_pushed += len(chunk)
 
-        await asyncio.sleep(duration + 0.2)
         latency_tracker.end("tts_audio_stream")
+        
+        # Wait for audio to drain
+        if total_samples_pushed > 0:
+            total_duration = total_samples_pushed / 48000
+            elapsed = time.time() - start_time
+            remaining = total_duration - elapsed
+            if remaining > 0:
+                await asyncio.sleep(remaining + 0.3) 
+        
         latency_tracker.end("tts_playback")
-
+    finally:
+        await room.local_participant.unpublish_track(publication.sid)
         if "[TERMINATE]" in text:
             logger.info("Termination signal detected in Agent response. Hanging up...")
             should_exit_event.set()
-
-    finally:
-        await room.local_participant.unpublish_track(publication.sid)
 
 
 async def play_greeting(room: rtc.Room):
@@ -441,7 +456,10 @@ async def process_audio_safe(
                             f"    - 图推理: {latency_tracker.get('llm_graph_invoke') * 1000:.0f}ms"
                         )
                         logger.info(
-                            f"  TTS生成: {latency_tracker.get('tts_generate') * 1000:.0f}ms"
+                            f"  TTS首包延迟: {latency_tracker.get('tts_first_chunk') * 1000:.0f}ms"
+                        )
+                        logger.info(
+                            f"  TTS生成(全): {latency_tracker.get('tts_generate') * 1000:.0f}ms"
                         )
                         logger.info(
                             f"  TTS播放: {latency_tracker.get('tts_playback') * 1000:.0f}ms"

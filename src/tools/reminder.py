@@ -8,6 +8,7 @@ import wave
 import asyncio
 from zoneinfo import ZoneInfo
 from config import config
+from tts import save_tts_to_file
 
 # Import DB functions
 from database import (
@@ -30,59 +31,21 @@ def save_wav_blocking(path: str, data: bytes):
 async def pre_render_tts(text: str, filename: str) -> str:
     """非阻塞预渲染 TTS，返回绝对路径"""
     try:
-        import dashscope
-        from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
-
-        # Use OPENAI_API_KEY if DASHSCOPE_API_KEY is not set (legacy check)
-        dashscope.api_key = os.getenv("DASHSCOPE_API_KEY") or config.OPENAI_API_KEY
-        voice_id = os.getenv("VOICE_ID")
-        if not voice_id:
-            print("[TTS] VOICE_ID not set")
-            return ""
-
         print(f"[TTS] Generating TTS for: {text[:50]}...")
-        print(f"[TTS] Using voice: {voice_id}")
-        print(f"[TTS] Model: cosyvoice-v3.5-flash, Format: PCM_48000HZ_MONO_16BIT")
-
-        synthesizer = SpeechSynthesizer(
-            model="cosyvoice-v3.5-flash",
-            voice=voice_id,
-            format=AudioFormat.PCM_48000HZ_MONO_16BIT,
-        )
-
-        # Run blocking TTS call in separate thread
-        audio_data = await asyncio.to_thread(synthesizer.call, text)
-
-        print(f"[TTS] Response type: {type(audio_data)}")
-        print(f"[TTS] Response is None: {audio_data is None}")
-        if audio_data:
-            print(
-                f"[TTS] Response length: {len(audio_data) if hasattr(audio_data, '__len__') else 'N/A'}"
-            )
-            # Check if it's WAV format (starts with RIFF header)
-            if len(audio_data) >= 4:
-                print(f"[TTS] First 4 bytes (hex): {audio_data[:4].hex()}")
-
-        if not audio_data:
-            print("[TTS] ERROR: TTS returned empty audio")
-            return ""
-
         out_path = os.path.join(AUDIO_CACHE_DIR, filename)
-        print(f"[TTS] Saving to: {out_path}")
-
-        # WAV format already has headers, write directly
-        await asyncio.to_thread(save_wav_blocking, out_path, audio_data)
-
+        
+        await save_tts_to_file(text, out_path)
+        
         if os.path.exists(out_path):
             file_size = os.path.getsize(out_path)
             print(f"[TTS] SUCCESS: Audio saved ({file_size} bytes): {out_path}")
-        return out_path
-        print("[TTS] ERROR: File was not created after save")
-        return ""
+            return out_path
+        else:
+            print("[TTS] ERROR: File was not created after save")
+            return ""
     except Exception as e:
         import traceback
-
-        print(f"[TTS] ERROR:预渲染失败: {e}")
+        print(f"[TTS] ERROR: 预渲染失败: {e}")
         traceback.print_exc()
         return ""
 
