@@ -10,7 +10,7 @@ def search_memory(query: str, runtime: ToolRuntime) -> str:
     """搜索用户的记忆和偏好"""
     state = runtime.state
     user_id = state.get("mem0_user_id", "default")
-    results = mem0_client.search(query, user_id=user_id)
+    results = mem0_client.search(query=query, filters={"AND": [{"user_id": user_id}]})
     if results and isinstance(results, dict):
         results = results.get("results", results)
     if isinstance(results, list):

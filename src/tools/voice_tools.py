@@ -168,7 +168,7 @@ def voice_search_memory(query: str) -> str:
     try:
         from mem0 import MemoryClient
         client = MemoryClient(api_key=config.MEM0_API_KEY)
-        results = client.search(query, user_id="default")
+        results = client.search(query=query, filters={"AND": [{"user_id": "default"}]})
         if results and isinstance(results, dict):
             results = results.get("results", results)
         if isinstance(results, list) and results:

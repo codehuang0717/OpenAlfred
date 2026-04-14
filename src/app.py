@@ -7,12 +7,6 @@ from database import (
     get_all_todos,
     init_db,
     get_all_reminders,
-    get_call_sessions,
-    get_call_messages,
-    get_chat_sessions,
-    get_chat_messages,
-    create_chat_session,
-    end_chat_session,
     get_setting,
     set_setting,
 )
@@ -72,68 +66,6 @@ async def check_reminders():
     await check_and_send_pending_reminders()
     return {"status": "checked"}
 
-
-@app.get("/api/call-sessions")
-async def get_call_sessions_api():
-    """Get all call sessions, most recent first."""
-    sessions = await get_call_sessions()
-    return sessions
-
-
-@app.get("/api/call-sessions/{session_id}/messages")
-async def get_call_messages_api(session_id: str):
-    """Get all messages for a specific call session."""
-    messages = await get_call_messages(session_id)
-    return messages
-
-
-# ─── Chat Session Endpoints ──────────────────────────────────────────────
-
-
-@app.get("/api/chat-sessions")
-async def get_chat_sessions_api():
-    """Get all chat sessions, most recent first."""
-    sessions = await get_chat_sessions()
-    return sessions
-
-
-@app.get("/api/chat-sessions/{session_id}/messages")
-async def get_chat_messages_api(session_id: str):
-    """Get all messages for a specific chat session."""
-    messages = await get_chat_messages(session_id)
-    return messages
-
-
-@app.post("/api/chat-sessions")
-async def create_chat_session_api(data: dict = None):
-    """Create a new chat session."""
-    import uuid
-    session_id = str(uuid.uuid4())
-    model_used = (data or {}).get("model_used", "gpt-cloud")
-    await create_chat_session(session_id, model_used)
-    return {"id": session_id, "status": "created"}
-
-
-@app.patch("/api/chat-sessions/{session_id}/end")
-async def end_chat_session_api(session_id: str):
-    """End an active chat session."""
-    await end_chat_session(session_id)
-    return {"status": "ended"}
-
-
-@app.delete("/api/chat-sessions/{session_id}")
-async def delete_chat_session_api(session_id: str):
-    """Delete a chat session and its messages."""
-    from database import DATABASE_PATH
-    import aiosqlite
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-        await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-        await db.commit()
-    return {"status": "deleted"}
-
-
-# ─── Model Management Endpoints ──────────────────────────────────────────
 
 
 @app.get("/api/models")

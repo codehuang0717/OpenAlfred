@@ -17,13 +17,10 @@ class TodoDict(TypedDict):
 
 class AgentState(BaseModel):
     """State for the text-based chat agent."""
+    messages: Annotated[list, add_messages] = []
     todos: list[TodoDict] = []
     mem0_user_id: str = "default"
-    tts_text: Optional[str] = None
-    jump_to: str = ""
-    structured_response: dict = {}
     model_selection: Optional[str] = "gpt-cloud"
-    chat_session_id: Optional[str] = None
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""

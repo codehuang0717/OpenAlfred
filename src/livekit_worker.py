@@ -28,10 +28,6 @@ from tts import get_tts_stream
 from database import (
     AUDIO_CACHE_DIR,
     init_db,
-    create_call_session,
-    end_call_session,
-    add_call_message,
-    get_call_session_history,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -83,37 +79,24 @@ async def call_agent(session_id: str, text: str, model_selection: str = None) ->
     model = model_selection or global_model_selection
 
     try:
-        # 1. Persist user message
-        await add_call_message(session_id, "user", text)
-
-        # 2. Load conversation history (last 10 turns)
-        latency_tracker.start("llm_load_history")
-        history = await get_call_session_history(session_id, max_turns=10)
-        latency_tracker.end("llm_load_history")
-
-        # 3. Build messages for the graph (history already has role/content dicts)
-        messages = [{"role": m["role"], "content": m["content"]} for m in history]
-        # Add current user message if not already in history
-        if not messages or messages[-1].get("content") != text:
-            messages.append({"role": "user", "content": text})
-
-        # 4. Invoke voice graph directly (no HTTP!)
+        # 1. Invoke voice graph directly (no HTTP!)
+        # History is handled by LangGraph checkpointer using session_id as thread_id
         latency_tracker.start("llm_graph_invoke")
-        result = await voice_graph.ainvoke({
-            "messages": messages,
-            "session_id": session_id,
-            "model_selection": model,
-        })
+        # In a real LangGraph setup, 'thread_id' in config allows the checkpointer to load messages.
+        # Here we pass current messages as part of the state, but 'session_id' will be our thread link.
+        result = await voice_graph.ainvoke(
+            {
+                "messages": [("user", text)],
+                "session_id": session_id,
+                "model_selection": model,
+            },
+            config={"configurable": {"thread_id": session_id}}
+        )
         latency_tracker.end("llm_graph_invoke")
 
         latency_tracker.end("llm_total")
 
-        tts_text = result.get("tts_text") or "收到"
-
-        # 5. Persist assistant response
-        await add_call_message(session_id, "assistant", tts_text)
-
-        return tts_text
+        return result.get("tts_text") or "收到"
     except Exception as e:
         logger.error(f"Voice Agent Error: {e}", exc_info=True)
         return "抱歉，我暂时无法处理你的请求。"
@@ -321,13 +304,8 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(process_audio_safe(track, room, should_exit))
 
     # Now safe to do async I/O — event handlers are already registered
-    call_type = "inbound"
-    if room.name.startswith("outbound-reminder-"):
-        call_type = "outbound-reminder"
-    elif room.name.startswith("outbound-"):
-        call_type = "outbound"
-    await create_call_session(room.name, call_type)
-    logger.info(f"Call session created: {room.name} ({call_type})")
+    # session_id will be used as the thread_id for LangGraph persistence
+    logger.info(f"Call session started: {room.name} ({call_type})")
 
     if room.name.startswith("outbound-"):
         logger.info("Outbound call: Waiting for Answer Status...")
@@ -358,8 +336,6 @@ async def entrypoint(ctx: JobContext):
     await should_exit.wait()
     logger.info("Termination signal received. Forcing SIP hangup...")
 
-    # End call session in database
-    await end_call_session(room.name)
     logger.info(f"Call session ended: {room.name}")
 
     try:
