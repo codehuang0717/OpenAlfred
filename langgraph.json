@@ -4,5 +4,8 @@
     "agent": "./src/main.py:graph",
     "voice": "./src/agent_graph.py:voice_graph"
   },
+  "auth": {
+    "path": "./src/auth.py:auth"
+  },
   "env": ".env"
 }

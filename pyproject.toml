@@ -25,6 +25,9 @@ dependencies = [
     "dashscope>=1.20.0",
     "langchain-ollama",
     "tzdata>=2024.1",
+    "bcrypt>=4.0.0",
+    "PyJWT>=2.8.0",
+    "tiktoken>=0.7.0",
 ]
 
 [build-system]

@@ -305,6 +305,7 @@ async def entrypoint(ctx: JobContext):
 
     # Now safe to do async I/O — event handlers are already registered
     # session_id will be used as the thread_id for LangGraph persistence
+    call_type = "outbound" if room.name.startswith("outbound-") else "inbound"
     logger.info(f"Call session started: {room.name} ({call_type})")
 
     if room.name.startswith("outbound-"):

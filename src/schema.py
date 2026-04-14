@@ -21,6 +21,8 @@ class AgentState(BaseModel):
     todos: list[TodoDict] = []
     mem0_user_id: str = "default"
     model_selection: Optional[str] = "gpt-cloud"
+    conversation_summary: str = ""
+    user_id: str = ""
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""

@@ -44,4 +44,17 @@ class Config:
     TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
     TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "120"))
 
+    # JWT Authentication Settings
+    JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+
+    # LangGraph Server
+    LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://localhost:2024")
+
+    # Context Management
+    MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
+    SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "15"))
+    MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
+
 config = Config()
