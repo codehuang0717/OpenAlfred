@@ -5,6 +5,7 @@ Bypasses LangGraph Server HTTP layer and CopilotKit middleware.
 Designed for minimal latency in the STT → LLM → TTS loop.
 
 Supports dynamic model switching between cloud GPT and local Ollama Gemma4.
+注意，目前该Agent已经被废弃了，不要再使用
 """
 
 import logging

@@ -9,6 +9,7 @@ Integrates the three-layer context management system.
 
 import asyncio
 import logging
+import httpx
 from typing import Any, Callable
 
 from langchain.agents import create_agent
@@ -91,14 +92,9 @@ class ModelSwitchMiddleware(AgentMiddleware):
             state = getattr(request, "state")
             model_selection = state.get("model_selection", "gpt-cloud") if isinstance(state, dict) else getattr(state, "model_selection", "gpt-cloud")
         
-        messages = list(request.messages)
-        thread_id = "default_thread"
-        if hasattr(request, "runtime") and getattr(request.runtime, "config", None):
-            thread_id = request.runtime.config.get("configurable", {}).get("thread_id")
-        if (not thread_id or thread_id == "default_thread") and messages and getattr(messages[0], "id", None):
-            thread_id = str(messages[0].id)
-        if not thread_id: thread_id = "default_thread"
-            
+        conf = request.runtime.config if hasattr(request, "runtime") and getattr(request.runtime, "config", None) else {}
+        thread_id = conf.get("configurable", {}).get("thread_id", "default_thread")
+        
         from database import get_thread_memory
         summary, _ = await get_thread_memory(thread_id)
 
@@ -121,7 +117,6 @@ class ModelSwitchMiddleware(AgentMiddleware):
         new_sys = SystemMessage(content=new_sys_content)
 
         # Truncate request messages to slide window (LLM context limits)
-        # We do not delete messages from the actual DB State, so UI retains history.
         messages = list(request.messages)
         trimmed_messages = messages[-ctx_manager.max_messages:] if len(messages) > ctx_manager.max_messages else messages
 
@@ -131,7 +126,6 @@ class ModelSwitchMiddleware(AgentMiddleware):
             system_message=new_sys,
             messages=trimmed_messages
         )
-        # --------------------------------------------------------
 
         if target_model is not request.model:
             logger.info(f"[ModelSwitch] Swapping model to: {model_selection}")
@@ -143,13 +137,22 @@ class ModelSwitchMiddleware(AgentMiddleware):
         return state
 
     async def aafter_agent(self, state, runtime, **kwargs):
-        """Auto summarize asynchronously if conversation is long."""
+        """Auto summarize asynchronously if conversation is long.
+        
+        Voice calls (type=call) skip summarization for minimal latency.
+        """
         if isinstance(state, dict):
             messages = state.get("messages", [])
         elif hasattr(state, "messages"):
             messages = list(state.messages)
         else:
             return state
+
+        # Voice fast-path: skip summarization for voice call threads
+        if hasattr(runtime, "config") and runtime.config:
+            run_metadata = runtime.config.get("metadata", {})
+            if run_metadata.get("type") == "call":
+                return state
 
         thread_id = "default_thread"
         if hasattr(runtime, "config") and runtime.config:

@@ -23,6 +23,12 @@ async def authenticate_user(
 ) -> Auth.types.MinimalUserDict:
     """Validate the JWT token from the Authorization header.
 
+    Supports two modes:
+    1. Normal user JWT (from web frontend)
+    2. Service-account JWT (from voice worker) — identified by "service": True in payload.
+       The voice worker mints these tokens using the shared JWT_SECRET and passes
+       the actual user_id as the "sub" claim so thread ownership is correctly assigned.
+
     Returns the user's identity, which LangGraph injects into the request context
     and makes available via config["configurable"]["langgraph_auth_user"].
     """
