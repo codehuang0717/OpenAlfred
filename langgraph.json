@@ -1,8 +1,10 @@
 {
-  "dependencies": [".", "src"],
+  "dependencies": [
+    ".",
+    "src"
+  ],
   "graphs": {
-    "agent": "./src/main.py:graph",
-    "voice": "./src/agent_graph.py:voice_graph"
+    "agent": "./src/main.py:graph"
   },
   "auth": {
     "path": "./src/auth.py:auth"

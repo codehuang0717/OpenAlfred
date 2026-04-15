@@ -24,6 +24,7 @@ class AgentState(BaseModel):
     conversation_summary: str = ""
     summarized_count: int = 0
     user_id: str = ""
+    system_instruction: str = ""
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""
