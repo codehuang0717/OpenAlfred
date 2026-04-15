@@ -26,8 +26,12 @@ from typing import Optional
 
 from database import (
     get_all_todos,
+    update_todo as db_update_todo,
+    delete_todo as db_delete_todo,
     init_db,
     get_all_reminders,
+    update_reminder as db_update_reminder,
+    delete_reminder as db_delete_reminder,
     get_setting,
     set_setting,
     create_user,
@@ -60,6 +64,19 @@ class ThreadRenameRequest(BaseModel):
 
 class ModelSelectionRequest(BaseModel):
     model_selection: str = "gpt-cloud"
+
+class TodoUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    emoji: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    expected_completion_at: Optional[str] = None
+
+class ReminderUpdateRequest(BaseModel):
+    scheduled_at: Optional[str] = None
+    title: Optional[str] = None
+    body: Optional[str] = None
 
 
 # ─── JWT Helpers ───────────────────────────────────────────────────────────
@@ -495,17 +512,72 @@ async def generate_thread_title(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/todos")
-async def get_todos():
+async def get_todos(user: dict = Depends(get_current_user)):
     """Get all todos from database."""
     todos = await get_all_todos()
     return todos
 
 
+@app.patch("/api/todos/{todo_id}")
+async def update_todo_api(
+    todo_id: str,
+    req: TodoUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Update a todo by ID."""
+    await db_update_todo(
+        id=todo_id,
+        title=req.title,
+        description=req.description,
+        emoji=req.emoji,
+        status=req.status,
+        notes=req.notes,
+        expected_completion_at=req.expected_completion_at,
+    )
+    return {"status": "updated"}
+
+
+@app.delete("/api/todos/{todo_id}")
+async def delete_todo_api(
+    todo_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a todo by ID."""
+    await db_delete_todo(todo_id)
+    return {"status": "deleted"}
+
+
 @app.get("/api/reminders")
-async def get_reminders():
+async def get_reminders(user: dict = Depends(get_current_user)):
     """Get all reminders from database."""
     reminders = await get_all_reminders()
     return reminders
+
+
+@app.patch("/api/reminders/{reminder_id}")
+async def update_reminder_api(
+    reminder_id: str,
+    req: ReminderUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Update a reminder by ID."""
+    await db_update_reminder(
+        id=reminder_id,
+        scheduled_at=req.scheduled_at,
+        title=req.title,
+        body=req.body,
+    )
+    return {"status": "updated"}
+
+
+@app.delete("/api/reminders/{reminder_id}")
+async def delete_reminder_api(
+    reminder_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a reminder by ID."""
+    await db_delete_reminder(reminder_id)
+    return {"status": "deleted"}
 
 
 @app.post("/api/reminders/check")

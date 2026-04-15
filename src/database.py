@@ -340,6 +340,37 @@ async def mark_reminder_sent(id: str):
         await db.commit()
 
 
+async def update_reminder(
+    id: str,
+    scheduled_at: Optional[str] = None,
+    title: Optional[str] = None,
+    body: Optional[str] = None,
+):
+    updates = []
+    params = []
+
+    if scheduled_at is not None:
+        updates.append("scheduled_at = ?")
+        params.append(scheduled_at)
+    if title is not None:
+        updates.append("title = ?")
+        params.append(title)
+    if body is not None:
+        updates.append("body = ?")
+        params.append(body)
+
+    if not updates:
+        return
+
+    params.append(id)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        await db.commit()
+
+
 async def get_all_reminders():
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
