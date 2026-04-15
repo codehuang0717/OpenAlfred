@@ -91,9 +91,13 @@ class ModelSwitchMiddleware(AgentMiddleware):
             state = getattr(request, "state")
             model_selection = state.get("model_selection", "gpt-cloud") if isinstance(state, dict) else getattr(state, "model_selection", "gpt-cloud")
         
+        messages = list(request.messages)
         thread_id = "default_thread"
         if hasattr(request, "runtime") and getattr(request.runtime, "config", None):
-            thread_id = request.runtime.config.get("configurable", {}).get("thread_id", "default_thread")
+            thread_id = request.runtime.config.get("configurable", {}).get("thread_id")
+        if (not thread_id or thread_id == "default_thread") and messages and getattr(messages[0], "id", None):
+            thread_id = str(messages[0].id)
+        if not thread_id: thread_id = "default_thread"
             
         from database import get_thread_memory
         summary, _ = await get_thread_memory(thread_id)
@@ -149,7 +153,10 @@ class ModelSwitchMiddleware(AgentMiddleware):
 
         thread_id = "default_thread"
         if hasattr(runtime, "config") and runtime.config:
-            thread_id = runtime.config.get("configurable", {}).get("thread_id", "default_thread")
+            thread_id = runtime.config.get("configurable", {}).get("thread_id")
+        if (not thread_id or thread_id == "default_thread") and messages and getattr(messages[0], "id", None):
+            thread_id = str(messages[0].id)
+        if not thread_id: thread_id = "default_thread"
 
         from database import get_thread_memory
         existing_summary, summarized_count = await get_thread_memory(thread_id)
