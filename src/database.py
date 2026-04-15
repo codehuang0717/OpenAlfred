@@ -70,6 +70,20 @@ async def init_db():
         except Exception:
             pass
 
+        # ── user_id migration (multi-user isolation) ──
+        try:
+            await db.execute(
+                "ALTER TABLE todos ADD COLUMN user_id TEXT DEFAULT 'default'"
+            )
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE reminders ADD COLUMN user_id TEXT DEFAULT 'default'"
+            )
+        except Exception:
+            pass
+
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -161,11 +175,12 @@ async def get_setting(key: str, default: str = None) -> str:
 
 
 
-async def get_all_todos() -> list[TodoDict]:
+async def get_all_todos(user_id: str = "default") -> list[TodoDict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM todos WHERE deleted = 0 ORDER BY created_at DESC"
+            "SELECT * FROM todos WHERE deleted = 0 AND user_id = ? ORDER BY created_at DESC",
+            (user_id,),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -179,13 +194,14 @@ async def add_todo(
     status: str = "pending",
     notes: str = "",
     expected_completion_at: Optional[str] = None,
+    user_id: str = "default",
 ):
     created_at = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
             """
-            INSERT INTO todos (id, title, description, emoji, status, created_at, completed_at, deleted, notes, expected_completion_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            INSERT INTO todos (id, title, description, emoji, status, created_at, completed_at, deleted, notes, expected_completion_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
                 id,
@@ -197,6 +213,7 @@ async def add_todo(
                 None,
                 notes,
                 expected_completion_at,
+                user_id,
             ),
         )
         await db.commit()
@@ -280,13 +297,14 @@ async def add_reminder(
     sound: Optional[str] = None,
     delivery_method: str = "push",
     audio_path: str = "",
+    user_id: str = "default",
 ):
     created_at = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
             """
-            INSERT INTO reminders (id, title, subtitle, body, scheduled_at, sent, level, sound, created_at, delivery_method, audio_path)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+            INSERT INTO reminders (id, title, subtitle, body, scheduled_at, sent, level, sound, created_at, delivery_method, audio_path, user_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
             """,
             (
                 id,
@@ -299,6 +317,7 @@ async def add_reminder(
                 created_at,
                 delivery_method,
                 audio_path,
+                user_id,
             ),
         )
         await db.commit()
@@ -371,11 +390,12 @@ async def update_reminder(
         await db.commit()
 
 
-async def get_all_reminders():
+async def get_all_reminders(user_id: str = "default"):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM reminders ORDER BY scheduled_at DESC"
+            "SELECT * FROM reminders WHERE user_id = ? ORDER BY scheduled_at DESC",
+            (user_id,),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]

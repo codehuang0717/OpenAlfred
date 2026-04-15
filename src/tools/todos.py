@@ -14,14 +14,25 @@ from database import (
 )
 
 
+def _get_user_id(runtime: ToolRuntime) -> str:
+    """Extract user_id from the agent state via ToolRuntime."""
+    if hasattr(runtime, "state") and runtime.state:
+        if isinstance(runtime.state, dict):
+            return runtime.state.get("user_id", "default")
+        return getattr(runtime.state, "user_id", "default")
+    return "default"
+
+
 async def initialize_todos(state: AgentState) -> dict:
     """Initialize todos from database on agent startup."""
-    todos = await get_all_todos()
+    user_id = state.user_id if hasattr(state, "user_id") else "default"
+    todos = await get_all_todos(user_id=user_id)
     return {"todos": todos}
 
 
 async def sync_todos_to_state(runtime: ToolRuntime):
-    todos = await get_all_todos()
+    user_id = _get_user_id(runtime)
+    todos = await get_all_todos(user_id=user_id)
     return Command(update={"todos": todos})
 
 
@@ -30,7 +41,8 @@ async def get_todos(runtime: ToolRuntime) -> list[TodoDict]:
     """
     Get all current todos from the database.
     """
-    todos = await get_all_todos()
+    user_id = _get_user_id(runtime)
+    todos = await get_all_todos(user_id=user_id)
     return todos
 
 
@@ -46,6 +58,7 @@ async def add_todo(
     """
     Add a new todo to the list.
     """
+    user_id = _get_user_id(runtime)
     id = str(uuid.uuid4())
     await db_add_todo(
         id=id,
@@ -54,11 +67,12 @@ async def add_todo(
         emoji=emoji,
         notes=notes,
         expected_completion_at=expected_completion_at,
+        user_id=user_id,
     )
 
     return Command(
         update={
-            "todos": await get_all_todos(),
+            "todos": await get_all_todos(user_id=user_id),
             "messages": [
                 ToolMessage(
                     content=f"Successfully added todo: {title}",
@@ -83,6 +97,7 @@ async def update_todo(
     """
     Update an existing todo by its ID.
     """
+    user_id = _get_user_id(runtime)
     await db_update_todo(
         id=id,
         title=title,
@@ -95,7 +110,7 @@ async def update_todo(
 
     return Command(
         update={
-            "todos": await get_all_todos(),
+            "todos": await get_all_todos(user_id=user_id),
             "messages": [
                 ToolMessage(
                     content=f"Successfully updated todo",
@@ -111,11 +126,12 @@ async def delete_todo(runtime: ToolRuntime, id: str) -> Command:
     """
     Delete a todo by its ID.
     """
+    user_id = _get_user_id(runtime)
     await db_delete_todo(id)
 
     return Command(
         update={
-            "todos": await get_all_todos(),
+            "todos": await get_all_todos(user_id=user_id),
             "messages": [
                 ToolMessage(
                     content=f"Successfully deleted todo",

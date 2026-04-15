@@ -513,8 +513,8 @@ async def generate_thread_title(
 
 @app.get("/api/todos")
 async def get_todos(user: dict = Depends(get_current_user)):
-    """Get all todos from database."""
-    todos = await get_all_todos()
+    """Get all todos for the current user."""
+    todos = await get_all_todos(user_id=user["id"])
     return todos
 
 
@@ -549,8 +549,8 @@ async def delete_todo_api(
 
 @app.get("/api/reminders")
 async def get_reminders(user: dict = Depends(get_current_user)):
-    """Get all reminders from database."""
-    reminders = await get_all_reminders()
+    """Get all reminders for the current user."""
+    reminders = await get_all_reminders(user_id=user["id"])
     return reminders
 
 
