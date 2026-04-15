@@ -22,6 +22,7 @@ class AgentState(BaseModel):
     mem0_user_id: str = "default"
     model_selection: Optional[str] = "gpt-cloud"
     conversation_summary: str = ""
+    summarized_count: int = 0
     user_id: str = ""
 
 class VoiceAgentState(TypedDict):

@@ -58,6 +58,40 @@ async def init_db():
             )
         except Exception:
             pass
+            
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS thread_memories (
+                thread_id TEXT PRIMARY KEY,
+                conversation_summary TEXT DEFAULT '',
+                summarized_count INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.commit()
+
+async def get_thread_memory(thread_id: str) -> tuple[str, int]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT conversation_summary, summarized_count FROM thread_memories WHERE thread_id = ?",
+            (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return row[0], row[1]
+            return "", 0
+
+async def set_thread_memory(thread_id: str, summary: str, count: int):
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO thread_memories (thread_id, conversation_summary, summarized_count, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                conversation_summary = excluded.conversation_summary,
+                summarized_count = excluded.summarized_count,
+                updated_at = excluded.updated_at
+        """, (thread_id, summary, count, now))
+        await db.commit()
 
         # Bark fields migrations
         for col in ["title", "subtitle", "sound"]:

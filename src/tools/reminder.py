@@ -1,4 +1,4 @@
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 import httpx
 from typing import Optional, Literal
 import uuid
@@ -88,8 +88,28 @@ async def _send_bark_notification(
         print(f"[Bark] EXCEPTION: {e}")
         return f"error: {str(e)}"
 
+def _get_user_id(runtime: ToolRuntime) -> str:
+    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
+    if hasattr(runtime, "config") and runtime.config:
+        conf = runtime.config.get("configurable", {})
+        auth_user = conf.get("langgraph_auth_user", {})
+        if isinstance(auth_user, dict) and "identity" in auth_user:
+            return auth_user["identity"]
+            
+        metadata = runtime.config.get("metadata", {})
+        if "owner" in metadata:
+            return metadata["owner"]
+            
+        if "thread_owner" in conf:
+            return conf["thread_owner"]
+    if hasattr(runtime, "state") and runtime.state:
+        if isinstance(runtime.state, dict): return runtime.state.get("user_id", "default")
+        return getattr(runtime.state, "user_id", "default")
+    return "default"
+
 @tool
 async def add_reminder(
+    runtime: ToolRuntime,
     body: str,
     scheduled_at: str,
     title: Optional[str] = None,
@@ -145,16 +165,17 @@ async def add_reminder(
             sound=sound,
             delivery_method=delivery_method,
             audio_path=audio_path,
+            user_id=_get_user_id(runtime),
         )
         return f"SUCCESS: Reminder set for {scheduled_at} (UTC: {final_time_utc}). Method: {delivery_method}"
     except Exception as e:
         return f"ERROR: {str(e)}"
 
 @tool
-async def list_reminders() -> str:
+async def list_reminders(runtime: ToolRuntime) -> str:
     """列出所有已设置的提醒任务。"""
     try:
-        reminders = await get_all_reminders()
+        reminders = await get_all_reminders(user_id=_get_user_id(runtime))
         if not reminders:
             return "当前没有任何提醒任务。"
         res = "📋 提醒任务列表:\n"

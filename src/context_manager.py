@@ -25,33 +25,11 @@ from config import config
 
 logger = logging.getLogger("context-manager")
 
-
-SUMMARY_PROMPT = """\
-请将以下对话历史压缩为一段简洁的摘要，保留关键信息、用户意图和重要结论。
-摘要应帮助AI在后续对话中保持上下文连贯性。只输出摘要内容，不要其他文字。
-
-对话历史：
-{conversation}
-"""
-
-KNOWLEDGE_EXTRACTION_PROMPT = """\
-从以下对话中提取用户的个人偏好、事实性信息和重要习惯。
-仅提取值得长期记住的信息（如姓名、职业、喜好、常用设置等）。
-如果没有值得提取的信息，回复"无"。
-每条信息单独一行，格式为简短陈述句。
-
-对话：
-用户：{user_message}
-助手：{assistant_message}
-"""
-
-TITLE_GENERATION_PROMPT = """\
-根据以下用户的第一条消息，生成一个简短的对话标题（8字以内，中文）。
-只输出标题本身，不要引号、标点或其他内容。
-
-用户消息：{message}
-"""
-
+from prompts import (
+    SUMMARY_PROMPT,
+    KNOWLEDGE_EXTRACTION_PROMPT,
+    TITLE_GENERATION_PROMPT,
+)
 
 class ContextManager:
     """Manages the three-layer memory system for conversations."""

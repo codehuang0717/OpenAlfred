@@ -15,7 +15,25 @@ from database import (
 
 
 def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from the agent state via ToolRuntime."""
+    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
+    if hasattr(runtime, "config") and runtime.config:
+        conf = runtime.config.get("configurable", {})
+        
+        # 1. CopilotKit/LangGraph Auth normally sets this
+        auth_user = conf.get("langgraph_auth_user", {})
+        if isinstance(auth_user, dict) and "identity" in auth_user:
+            return auth_user["identity"]
+            
+        # 2. Extract from Thread metadata which app.py explicitly sets
+        metadata = runtime.config.get("metadata", {})
+        if "owner" in metadata:
+            return metadata["owner"]
+            
+        # Fallback to direct thread owner if available
+        if "thread_owner" in conf:
+            return conf["thread_owner"]
+
+    # Fallback to state payload
     if hasattr(runtime, "state") and runtime.state:
         if isinstance(runtime.state, dict):
             return runtime.state.get("user_id", "default")
