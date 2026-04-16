@@ -54,94 +54,71 @@ def _room_name_to_thread_uuid(room_name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"call:{room_name}"))
 
 
+async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id: str = "default") -> str:
+    """ Core logic to initiate an outbound SIP call. Returns status message. """
+    room_name = f"outbound-{user_id}-{int(time.time())}"
+    thread_uuid = _room_name_to_thread_uuid(room_name)
+    
+    thread_metadata = {
+        "owner": user_id,
+        "type": "call",
+        "title": "语音外拨呼叫 (主动监督)",
+        "room_name": room_name,
+    }
+    if initial_speech:
+        thread_metadata["initial_speech"] = initial_speech
+
+    # Step 1: Pre-create thread
+    try:
+        now = int(time.time())
+        svc_jwt = pyjwt.encode(
+            {"sub": user_id, "username": "supervisor", "service": True,
+             "iat": now, "exp": now + 3600},
+            config.JWT_SECRET, algorithm=config.JWT_ALGORITHM,
+        )
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{config.LANGGRAPH_API_URL}/threads",
+                headers={"Authorization": f"Bearer {svc_jwt}", "Content-Type": "application/json"},
+                json={"thread_id": thread_uuid, "metadata": thread_metadata},
+                timeout=5.0,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to pre-create call thread: {e}")
+
+    # Step 2: Dial
+    jwt_token = generate_sip_token()
+    sip_headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
+    
+    api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+    url = f"{api_url.rstrip('/')}/twirp/livekit.SIP/CreateSIPParticipant"
+
+    dial_data = {
+        "sipTrunkId": OUTBOUND_TRUNK_ID,
+        "sipCallTo": phone_number,
+        "roomName": room_name,
+        "participantIdentity": "agent_caller",
+        "participantName": "Alfred Supervisor",
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, headers=sip_headers, json=dial_data, timeout=10.0)
+            if resp.status_code == 200:
+                return f"呼叫已发起 ({phone_number})"
+            return f"呼叫失败: {resp.text}"
+    except Exception as e:
+        return f"系统异常: {str(e)}"
+
 @tool
 async def make_outbound_call(
     runtime: ToolRuntime, phone_number: str = "100", initial_speech: str = ""
 ) -> Command:
     """
     主动拨打电话给用户。当你需要紧急提醒用户或者用户要求你打电话时使用。
-
-    Args:
-        phone_number: 拨打的目标号码，默认为 "100"（分机号）。
-        initial_speech: 拨通后 Agent 要说的第一句话。如果为空，将使用默认欢迎语。
     """
     user_id = _get_user_id(runtime)
-    room_name = f"outbound-{user_id}-{int(time.time())}"
-
-    # ── Step 1: Pre-create call thread in LangGraph Server ──────────────
-    # The voice worker will read initial_speech from thread metadata.
-    # This is safe (no deadlock) because POST /threads is a pure CRUD op
-    # that doesn't consume an Agent Worker slot.
-    thread_uuid = _room_name_to_thread_uuid(room_name)
-    thread_metadata = {
-        "owner": user_id,
-        "type": "call",
-        "title": "语音外拨呼叫",
-        "room_name": room_name,
-    }
-    if initial_speech:
-        thread_metadata["initial_speech"] = initial_speech
-
-    try:
-        now = int(time.time())
-        svc_jwt = pyjwt.encode(
-            {"sub": user_id, "username": "call-tool", "service": True,
-             "iat": now, "exp": now + 3600},
-            config.JWT_SECRET, algorithm=config.JWT_ALGORITHM,
-        )
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{config.LANGGRAPH_API_URL}/threads",
-                headers={
-                    "Authorization": f"Bearer {svc_jwt}",
-                    "Content-Type": "application/json",
-                },
-                json={"thread_id": thread_uuid, "metadata": thread_metadata},
-                timeout=5.0,
-            )
-            if resp.status_code in (200, 201):
-                logger.info(f"Pre-created call thread {thread_uuid} for room {room_name}")
-            else:
-                logger.warning(f"Thread pre-create returned {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logger.warning(f"Failed to pre-create call thread: {e}")
-
-    # ── Step 2: Dial via LiveKit SIP API ────────────────────────────────
-    jwt_token = generate_sip_token()
-    sip_headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "Content-Type": "application/json",
-    }
-
-    api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-    if api_url.endswith("/"):
-        api_url = api_url[:-1]
-    url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"
-
-    # No longer need roomMetadata — initial_speech lives in LG thread metadata
-    dial_data = {
-        "sipTrunkId": OUTBOUND_TRUNK_ID,
-        "sipCallTo": phone_number,
-        "roomName": room_name,
-        "participantIdentity": "agent_caller",
-        "participantName": "AI Assistant",
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            logger.info(f"SIP API Request: {url}")
-            resp = await client.post(url, headers=sip_headers, json=dial_data, timeout=10.0)
-
-            if resp.status_code == 200:
-                logger.info("Outbound call successful")
-                msg = f"呼叫已发起，请注意接听分机 {phone_number}。"
-            else:
-                logger.error(f"LiveKit SIP Error ({resp.status_code}): {resp.text}")
-                msg = f"发起呼叫失败 (API返回: {resp.status_code})。"
-
-    except Exception as e:
-        logger.error(f"Call Tool API Exception: {e}")
-        msg = f"呼叫系统请求异常: {str(e)}"
+    msg = await dial_user(phone_number, initial_speech, user_id)
 
     return Command(
         update={

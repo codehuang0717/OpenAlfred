@@ -49,16 +49,11 @@ async def agent_node(state: AgentState, config):
     """
     The main reasoning node.
     """
-    from tools.memory import memTools
-    from tools.reminder import reminder_tools
-    from tools.call_user import call_tools
-    from tools.todos import todo_tools
-    
-    tools = [*todo_tools, *memTools, *reminder_tools, *call_tools]
+    from tools import ALL_TOOLS
     model_selection = state.model_selection or "gpt-cloud"
     
     # Bind tools to the model
-    llm = get_model(model_selection).bind_tools(tools)
+    llm = get_model(model_selection).bind_tools(ALL_TOOLS)
     
     # Construction of the dynamic prompt:
     # 1. Prepend the transient system instruction (with current time/summary)

@@ -16,9 +16,10 @@ from nodes import load_context_node, agent_node, summarize_node
 
 # Import tools
 from tools.memory import memTools
+from tools.todos import todo_tools
 from tools.reminder import reminder_tools
 from tools.call_user import call_tools
-from tools.todos import todo_tools
+from tools.eye import search_screen_history, get_current_screen_context
 
 logger = logging.getLogger("chat-agent")
 
@@ -36,13 +37,17 @@ def should_continue(state: AgentState) -> Literal["tools", "summarize"]:
 
 # ─── Graph Construction ───────────────────────────────────────────────────
 
-# Define the tools available to the agent
-tools = [*todo_tools, *memTools, *reminder_tools, *call_tools]
-tool_node = ToolNode(tools)
+# Import tools
+from tools import ALL_TOOLS
+
+# ─── Graph Construction ───────────────────────────────────────────────────
+
+# Define the tools available to the agent for execution
+tool_node = ToolNode(ALL_TOOLS)
 
 # Bind tools to the model once
 # NOTE: We use gpt-cloud as requested.
-model = get_model("gpt-cloud").bind_tools(tools)
+model = get_model("gpt-cloud").bind_tools(ALL_TOOLS)
 
 def call_model(state: AgentState, config):
     """Wrapper for the agent node to use the bound model."""
