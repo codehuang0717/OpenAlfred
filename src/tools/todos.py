@@ -6,32 +6,43 @@ from langchain.tools import ToolRuntime, tool
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 from schema import AgentState, TodoDict
+from utils.time_utils import localize_to_utc
 from database import (
     get_all_todos,
+    get_active_user,
     add_todo as db_add_todo,
     update_todo as db_update_todo,
     delete_todo as db_delete_todo,
 )
 
 
-def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
+async def _get_user_id(runtime: ToolRuntime) -> str:
+    """Extract user_id from RunnableConfig populated by LangGraph Auth or custom metadata."""
     if hasattr(runtime, "config") and runtime.config:
         conf = runtime.config.get("configurable", {})
         
-        # 1. CopilotKit/LangGraph Auth normally sets this
+        # 1. LangGraph Auth (Service JWT sub)
         auth_user = conf.get("langgraph_auth_user", {})
         if isinstance(auth_user, dict) and "identity" in auth_user:
             return auth_user["identity"]
             
-        # 2. Extract from Thread metadata which app.py explicitly sets
+        # 2. Direct configurable fields (Voice Agent Explicit Injection)
+        if "user_id" in conf: return conf["user_id"]
+        if "owner" in conf: return conf["owner"]
+        if "thread_owner" in conf: return conf["thread_owner"]
+
+        # 3. Request Metadata (Passed in runs/wait body)
         metadata = runtime.config.get("metadata", {})
         if "owner" in metadata:
             return metadata["owner"]
-            
-        # Fallback to direct thread owner if available
-        if "thread_owner" in conf:
-            return conf["thread_owner"]
+
+    # 4. Global Fallback: Query the currently active user from DB (Last Resort)
+    try:
+        active_user = await get_active_user()
+        if active_user:
+            return active_user["id"]
+    except Exception:
+        pass
 
     # Fallback to state payload
     if hasattr(runtime, "state") and runtime.state:
@@ -49,7 +60,7 @@ async def initialize_todos(state: AgentState) -> dict:
 
 
 async def sync_todos_to_state(runtime: ToolRuntime):
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
     todos = await get_all_todos(user_id=user_id)
     return Command(update={"todos": todos})
 
@@ -59,7 +70,7 @@ async def get_todos(runtime: ToolRuntime) -> list[TodoDict]:
     """
     Get all current todos from the database.
     """
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
     todos = await get_all_todos(user_id=user_id)
     return todos
 
@@ -76,15 +87,26 @@ async def add_todo(
     """
     Add a new todo to the list.
     """
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
     id = str(uuid.uuid4())
+    
+    # Standardize time if provided
+    formatted_time = expected_completion_at
+    if expected_completion_at:
+        try:
+            formatted_time = localize_to_utc(expected_completion_at)
+        except Exception as e:
+            # Fallback to original or handle error - for high availability, we log and keep 
+            # if LLM produced something truly weird, but our tool description should prevent this.
+            pass
+
     await db_add_todo(
         id=id,
         title=title,
         description=description,
         emoji=emoji,
         notes=notes,
-        expected_completion_at=expected_completion_at,
+        expected_completion_at=formatted_time,
         user_id=user_id,
     )
 
@@ -115,7 +137,15 @@ async def update_todo(
     """
     Update an existing todo by its ID.
     """
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
+    
+    # Standardize time if provided
+    if expected_completion_at:
+        try:
+            expected_completion_at = localize_to_utc(expected_completion_at)
+        except:
+            pass
+
     await db_update_todo(
         id=id,
         title=title,
@@ -144,7 +174,7 @@ async def delete_todo(runtime: ToolRuntime, id: str) -> Command:
     """
     Delete a todo by its ID.
     """
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
     await db_delete_todo(id)
 
     return Command(

@@ -684,3 +684,17 @@ async def set_model_selection_api(data: ModelSelectionRequest):
     """Set the globally selected model type."""
     await set_setting("model_selection", data.model_selection)
     return {"status": "updated", "model_selection": data.model_selection}
+class SupervisorConfigRequest(BaseModel):
+    enabled: bool
+
+@app.get("/api/supervisor/config")
+async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
+    """Get the current supervisor enabled status."""
+    enabled_str = await get_setting("supervisor_enabled", "true")
+    return {"enabled": enabled_str.lower() == "true"}
+
+@app.post("/api/supervisor/config")
+async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = Depends(get_current_user)):
+    """Set the supervisor enabled status."""
+    await set_setting("supervisor_enabled", str(data.enabled).lower())
+    return {"status": "updated", "enabled": data.enabled}

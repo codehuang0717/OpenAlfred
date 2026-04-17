@@ -11,6 +11,7 @@ from langchain.messages import ToolMessage
 from langgraph.types import Command
 
 from config import config
+from database import get_active_user
 
 logger = logging.getLogger("call-user-tool")
 
@@ -31,20 +32,38 @@ def generate_sip_token():
     return pyjwt.encode(payload, config.LIVEKIT_API_SECRET, algorithm="HS256")
 
 
-def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
+async def _get_user_id(runtime: ToolRuntime) -> str:
+    """Extract user_id from RunnableConfig populated by LangGraph Auth or custom metadata."""
     if hasattr(runtime, "config") and runtime.config:
         conf = runtime.config.get("configurable", {})
+        
+        # 1. LangGraph Auth (Service JWT sub)
         auth_user = conf.get("langgraph_auth_user", {})
         if isinstance(auth_user, dict) and "identity" in auth_user:
             return auth_user["identity"]
+            
+        # 2. Direct configurable fields
+        if "user_id" in conf: return conf["user_id"]
+        if "owner" in conf: return conf["owner"]
+        if "thread_owner" in conf: return conf["thread_owner"]
+
+        # 3. Request Metadata
         metadata = runtime.config.get("metadata", {})
         if "owner" in metadata:
             return metadata["owner"]
-        if "thread_owner" in conf:
-            return conf["thread_owner"]
+
+    # 4. Global Fallback: Query the currently active user from DB (Last Resort)
+    try:
+        active_user = await get_active_user()
+        if active_user:
+            return active_user["id"]
+    except Exception:
+        pass
+
+    # Fallback to state payload
     if hasattr(runtime, "state") and runtime.state:
-        if isinstance(runtime.state, dict): return runtime.state.get("user_id", "default")
+        if isinstance(runtime.state, dict):
+            return runtime.state.get("user_id", "default")
         return getattr(runtime.state, "user_id", "default")
     return "default"
 
@@ -117,7 +136,7 @@ async def make_outbound_call(
     """
     主动拨打电话给用户。当你需要紧急提醒用户或者用户要求你打电话时使用。
     """
-    user_id = _get_user_id(runtime)
+    user_id = await _get_user_id(runtime)
     msg = await dial_user(phone_number, initial_speech, user_id)
 
     return Command(

@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 from config import config
 from tts import save_tts_to_file
 
-# Import DB functions
+# Import DB and utils functions
+from utils.time_utils import localize_to_utc
 from database import (
     add_reminder as db_add_reminder,
     get_pending_reminders,
@@ -124,9 +125,10 @@ async def add_reminder(
     
     Args:
         body: 提醒的内容 (必须)
-        scheduled_at: 提醒的绝对 ISO 8601 时间字符串 (必须)。
-                      基于系统提供的"Current Time"计算得出。
-                      例如: "2026-04-08T15:30:00"
+        scheduled_at: 提醒的绝对时间字符串 (必须)。
+                      基于系统提供的 "Current Time" 计算。
+                      注意：务必提供用户所在的本地时间 (Europe/London)。
+                      不要带 "Z" 或时区偏移。例如: "2026-04-08T15:30:00"
         title: 提醒标题 (可选)
         subtitle: 提醒副标题 (可选)
         level: 推送优先级 - "active" (默认), "critical", "timeSensitive", 或 "passive"
@@ -137,18 +139,13 @@ async def add_reminder(
     try:
         reminder_id = str(uuid.uuid4())
         
-        # 1. 解析时间。LLM 现在应该提供标准 ISO 格式。
+        # 1. 严格使用统一的本地化逻辑解析时间
         try:
-            # 尝试作为带时区的日期解析
-            dt_with_tz = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
-        except ValueError:
-            # 尝试作为无时区日期解析，默认视为英国伦敦时间
-            dt_naive = datetime.fromisoformat(scheduled_at)
-            dt_with_tz = dt_naive.replace(tzinfo=ZoneInfo("Europe/London"))
-
-        # 转换为 UTC 后存入数据库
-        dt_utc = dt_with_tz.astimezone(timezone.utc)
-        final_time_utc = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            final_time_utc = localize_to_utc(scheduled_at)
+            if not final_time_utc:
+                raise ValueError("Scheduled time cannot be empty")
+        except Exception as e:
+            return f"ERROR: {str(e)}"
 
         audio_path = ""
         if delivery_method == "call" and call_greeting:

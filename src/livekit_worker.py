@@ -216,7 +216,11 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                     },
 
                     "config": {
-                        "configurable": {"thread_id": thread_uuid},
+                        "configurable": {
+                            "thread_id": thread_uuid,
+                            "user_id": user_id,
+                            "owner": user_id
+                        },
                     },
                     "metadata": {
                         "owner": user_id,

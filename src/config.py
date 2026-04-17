@@ -34,7 +34,7 @@ class Config:
     # Local Model Settings
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "gemma4:e2b")
-    CLOUD_MODEL_NAME = os.getenv("CLOUD_MODEL_NAME", "gpt-5.4-mini") # Use a real name by default
+    CLOUD_MODEL_NAME = os.getenv("CLOUD_MODEL_NAME", "gpt-5.4-nano")
     BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
     # TTS Settings (Faster-Qwen3-TTS)
@@ -56,5 +56,13 @@ class Config:
     MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
     SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "15"))
     MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
+
+    # Timezone Settings
+    TIMEZONE = os.getenv("TIMEZONE", "Europe/London")
+
+    # Supervisor Settings
+    SUPERVISOR_INTERVAL = int(os.getenv("SUPERVISOR_INTERVAL", "600")) # 10 minutes
+    SUPERVISOR_PHONE_NUMBER = os.getenv("SUPERVISOR_PHONE_NUMBER", "100")
+    SUPERVISOR_OCR_WINDOW_MINS = int(os.getenv("SUPERVISOR_OCR_WINDOW_MINS", "10"))
 
 config = Config()
