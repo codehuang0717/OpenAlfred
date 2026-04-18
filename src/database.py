@@ -23,7 +23,8 @@ async def init_db():
                 completed_at TEXT,
                 deleted INTEGER DEFAULT 0,
                 notes TEXT DEFAULT '',
-                expected_completion_at TEXT
+                expected_completion_at TEXT,
+                scheduled_start_at TEXT
             )
         """)
 
@@ -115,6 +116,12 @@ async def set_thread_memory(thread_id: str, summary: str, count: int):
         except Exception:
             pass
 
+        try:
+            await db.execute(
+                "ALTER TABLE todos ADD COLUMN scheduled_start_at TEXT"
+            )
+        except Exception:
+            pass
         # ── user_id migration (multi-user isolation) ──
         try:
             await db.execute(
@@ -249,14 +256,15 @@ async def add_todo(
     status: str = "pending",
     notes: str = "",
     expected_completion_at: Optional[str] = None,
+    scheduled_start_at: Optional[str] = None,
     user_id: str = "default",
 ):
     created_at = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
             """
-            INSERT INTO todos (id, title, description, emoji, status, created_at, completed_at, deleted, notes, expected_completion_at, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            INSERT INTO todos (id, title, description, emoji, status, created_at, completed_at, deleted, notes, expected_completion_at, scheduled_start_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
             """,
             (
                 id,
@@ -268,6 +276,7 @@ async def add_todo(
                 None,
                 notes,
                 expected_completion_at,
+                scheduled_start_at,
                 user_id,
             ),
         )
@@ -282,6 +291,7 @@ async def update_todo(
     status: Optional[str] = None,
     notes: Optional[str] = None,
     expected_completion_at: Optional[str] = None,
+    scheduled_start_at: Optional[str] = None,
 ):
     updates = []
     params = []
@@ -309,6 +319,9 @@ async def update_todo(
     if expected_completion_at is not None:
         updates.append("expected_completion_at = ?")
         params.append(expected_completion_at)
+    if scheduled_start_at is not None:
+        updates.append("scheduled_start_at = ?")
+        params.append(scheduled_start_at)
 
     if not updates:
         return

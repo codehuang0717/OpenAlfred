@@ -83,6 +83,7 @@ async def add_todo(
     emoji: str = "🎯",
     notes: str = "",
     expected_completion_at: Optional[str] = None,
+    scheduled_start_at: Optional[str] = None,
 ) -> Command:
     """
     Add a new todo to the list.
@@ -100,6 +101,13 @@ async def add_todo(
             # if LLM produced something truly weird, but our tool description should prevent this.
             pass
 
+    formatted_start_time = scheduled_start_at
+    if scheduled_start_at:
+        try:
+            formatted_start_time = localize_to_utc(scheduled_start_at)
+        except:
+            pass
+
     await db_add_todo(
         id=id,
         title=title,
@@ -107,6 +115,7 @@ async def add_todo(
         emoji=emoji,
         notes=notes,
         expected_completion_at=formatted_time,
+        scheduled_start_at=formatted_start_time,
         user_id=user_id,
     )
 
@@ -133,6 +142,7 @@ async def update_todo(
     status: Optional[Literal["pending", "completed"]] = None,
     notes: Optional[str] = None,
     expected_completion_at: Optional[str] = None,
+    scheduled_start_at: Optional[str] = None,
 ) -> Command:
     """
     Update an existing todo by its ID.
@@ -146,6 +156,12 @@ async def update_todo(
         except:
             pass
 
+    if scheduled_start_at:
+        try:
+            scheduled_start_at = localize_to_utc(scheduled_start_at)
+        except:
+            pass
+
     await db_update_todo(
         id=id,
         title=title,
@@ -154,6 +170,7 @@ async def update_todo(
         status=status,
         notes=notes,
         expected_completion_at=expected_completion_at,
+        scheduled_start_at=scheduled_start_at,
     )
 
     return Command(

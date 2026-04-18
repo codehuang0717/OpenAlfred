@@ -1,5 +1,5 @@
 from typing import Annotated, Optional, Literal
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 from pydantic import BaseModel
 from langgraph.graph.message import add_messages
 
@@ -10,10 +10,11 @@ class TodoDict(TypedDict):
     emoji: str
     status: Literal["pending", "completed"]
     created_at: str
-    completed_at: Optional[str]
+    completed_at: NotRequired[Optional[str]]
     deleted: int
     notes: str
-    expected_completion_at: Optional[str]
+    expected_completion_at: NotRequired[Optional[str]]
+    scheduled_start_at: NotRequired[Optional[str]]
 
 class AgentState(BaseModel):
     """State for the text-based chat agent."""

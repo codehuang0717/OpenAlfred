@@ -72,6 +72,7 @@ class TodoUpdateRequest(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     expected_completion_at: Optional[str] = None
+    scheduled_start_at: Optional[str] = None
 
 class ReminderUpdateRequest(BaseModel):
     scheduled_at: Optional[str] = None
@@ -576,6 +577,7 @@ async def update_todo_api(
         status=req.status,
         notes=req.notes,
         expected_completion_at=req.expected_completion_at,
+        scheduled_start_at=req.scheduled_start_at,
     )
     return {"status": "updated"}
 

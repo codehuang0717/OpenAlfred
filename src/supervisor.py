@@ -82,35 +82,75 @@ class ProactiveSupervisor:
             state = await get_supervisor_state(user_id)
 
         # 3. Fetch Context
+        now = datetime.now(timezone.utc)
         todos = await get_all_todos(user_id=user_id)
         pending_todos = [t for t in todos if t['status'] == 'pending']
         
+        # Filter Active Tasks
+        active_todos = []
+        scheduled_todos = []
+        
+        for t in pending_todos:
+            start_str = t.get('scheduled_start_at')
+            if not start_str:
+                active_todos.append(t)
+                continue
+            
+            try:
+                # Handle Z or +00:00 format
+                start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                if start_dt <= now:
+                    active_todos.append(t)
+                else:
+                    scheduled_todos.append(t)
+            except Exception as e:
+                logger.warning(f"Error parsing start time for todo {t['id']}: {e}")
+                active_todos.append(t) # Default to active if parsing fails
+
         # Display Monitoring Context
-        tasks_display = "\n".join([f"[blue]•[/blue] {t['title']}" for t in pending_todos]) if pending_todos else "None (IDLE)"
+        active_display = "\n".join([f"[blue]•[/blue] {t['title']}" for t in active_todos]) if active_todos else "[italic grey]None (Idle)[/italic grey]"
+        scheduled_display = "\n".join([f"[grey]• {t['title']} (Starts: {t['scheduled_start_at']})[/grey]" for t in scheduled_todos])
+        
+        display_text = f"[bold cyan]User:[/bold cyan] {username}\n[bold cyan]Monitoring Tasks:[/bold cyan]\n{active_display}"
+        if scheduled_todos:
+            display_text += f"\n\n[bold yellow]Coming Up:[/bold yellow]\n{scheduled_display}"
+
         console.print(Panel(
-            f"[bold cyan]User:[/bold cyan] {username}\n"
-            f"[bold cyan]Monitoring Tasks:[/bold cyan]\n{tasks_display}",
+            display_text,
             title="[supervisor] Current Context",
             border_style="blue"
         ))
 
-        if not pending_todos:
-            logger.info(f"User {username} has no pending tasks. Monitoring status: Idle.")
+        if not active_todos:
+            logger.info(f"User {username} has no active tasks at this time. Monitoring status: Idle.")
             if state.get('is_distracted'):
+                # Also reset distraction if user was distracted but now has no tasks to do
                 await reset_supervisor_state(user_id)
             return
 
         ocr_context = await get_recent_ocr_text(minutes=config.SUPERVISOR_OCR_WINDOW_MINS)
         
         # 4. Calculate Distraction Duration
-        now = datetime.now(timezone.utc)
+        # now is already defined above
         distraction_duration = 0
         if state.get('is_distracted') and state.get('distraction_start_time'):
-            start_time = datetime.fromisoformat(state['distraction_start_time'])
-            distraction_duration = int((now - start_time).total_seconds() / 60)
+            try:
+                start_time = datetime.fromisoformat(state['distraction_start_time'].replace('Z', '+00:00'))
+                distraction_duration = int((now - start_time).total_seconds() / 60)
+            except:
+                pass
         
         # 5. Analyze with LLM
-        tasks_str = "\n".join([f"- {t['title']}: {t['description']}" for t in pending_todos])
+        tasks_list = []
+        for t in active_todos:
+            t_str = f"- {t['title']}: {t['description']}"
+            if t.get('scheduled_start_at'):
+                t_str += f" (Scheduled Start: {t['scheduled_start_at']})"
+            if t.get('expected_completion_at'):
+                t_str += f" (Deadline: {t['expected_completion_at']})"
+            tasks_list.append(t_str)
+            
+        tasks_str = "\n".join(tasks_list)
         focus_task = pending_todos[0]['title'] 
         
         prompt = SUPERVISOR_PROMPT.format(
