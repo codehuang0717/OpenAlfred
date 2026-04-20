@@ -288,7 +288,7 @@ async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -
 # Removed old text_to_speech function to use streaming src/tts.py
 
 
-async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
+async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event):
     latency_tracker.start("tts_generate")
     source = rtc.AudioSource(48000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("tts", source)
@@ -298,13 +298,16 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
         first_chunk_found = False
         
         jitter_buffer_bytes = b""
-        # Using 250ms as the stable default for RTX 2060
         jitter_threshold_bytes = int(48000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
         playback_started = False
         total_samples_pushed = 0
         start_time = 0
 
         async for audio_chunk in get_tts_stream(text, target_sample_rate=48000):
+            if interrupt_event.is_set():
+                logger.info("[VoiceInterrupt] TTS audio playback aborted due to interrupt during stream.")
+                break
+
             if not first_chunk_found:
                 latency_tracker.end("tts_first_chunk")
                 latency_tracker.end("tts_generate")
@@ -312,7 +315,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
             
             jitter_buffer_bytes += audio_chunk
             
-            # Start playing once jitter buffer threshold is reached
             if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
@@ -326,6 +328,8 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
                 
                 chunk_size = 1920 
                 for i in range(0, len(audio_np), chunk_size):
+                    if interrupt_event.is_set():
+                        break
                     chunk = audio_np[i : i + chunk_size]
                     if len(chunk) > 0:
                         frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
@@ -334,13 +338,15 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
                 await asyncio.sleep(0.01)
 
         # Final cleanup for remaining small chunks
-        if jitter_buffer_bytes:
+        if jitter_buffer_bytes and not interrupt_event.is_set():
             if not playback_started:
                 playback_started = True
                 start_time = time.time()
             import numpy as np
             audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
             for i in range(0, len(audio_np), 1920):
+                if interrupt_event.is_set():
+                    break
                 chunk = audio_np[i : i + 1920]
                 frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
                 await source.capture_frame(frame)
@@ -349,7 +355,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
         latency_tracker.end("tts_audio_stream")
         
         # Wait for audio to drain
-        if total_samples_pushed > 0:
+        if total_samples_pushed > 0 and not interrupt_event.is_set():
             total_duration = total_samples_pushed / 48000
             elapsed = time.time() - start_time
             remaining = total_duration - elapsed
@@ -357,6 +363,8 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event):
                 await asyncio.sleep(remaining + 0.3) 
         
         latency_tracker.end("tts_playback")
+    except asyncio.CancelledError:
+        logger.info("[VoiceInterrupt] TTS audio task cancelled gracefully.")
     finally:
         await room.local_participant.unpublish_track(publication.sid)
         if "[TERMINATE]" in text:
