@@ -22,6 +22,10 @@ def localize_to_utc(time_str: str) -> str:
     """
     if not time_str:
         return ""
+    
+    # 幂等性检查：如果已经是 UTC 格式 (以 'Z' 结尾或包含 '+')，直接返回
+    if time_str.endswith('Z') or '+' in time_str:
+        return time_str
         
     try:
         # Strip 'Z' if present, because we want to mandate the local interpretation 

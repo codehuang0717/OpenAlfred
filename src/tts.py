@@ -20,7 +20,8 @@ async def get_tts_stream(text: str, target_sample_rate: int = 48000) -> AsyncGen
         "model": config.TTS_MODEL,
         "input": text,
         "voice": config.TTS_VOICE,
-        "response_format": "pcm"
+        "response_format": "pcm",
+        "stream": True
     }
 
     try:
