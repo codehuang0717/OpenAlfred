@@ -290,7 +290,7 @@ async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -
 
 async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event):
     latency_tracker.start("tts_generate")
-    source = rtc.AudioSource(48000, 1)
+    source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("tts", source)
     publication = await room.local_participant.publish_track(track)
     try:
@@ -298,12 +298,12 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
         first_chunk_found = False
         
         jitter_buffer_bytes = b""
-        jitter_threshold_bytes = int(48000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
+        jitter_threshold_bytes = int(24000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
         playback_started = False
         total_samples_pushed = 0
         start_time = 0
 
-        async for audio_chunk in get_tts_stream(text, target_sample_rate=48000):
+        async for audio_chunk in get_tts_stream(text, target_sample_rate=24000):
             if interrupt_event.is_set():
                 logger.info("[VoiceInterrupt] TTS audio playback aborted due to interrupt during stream.")
                 break
@@ -326,13 +326,13 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
                 jitter_buffer_bytes = b"" 
                 
-                chunk_size = 1920 
+                chunk_size = 480 
                 for i in range(0, len(audio_np), chunk_size):
                     if interrupt_event.is_set():
                         break
                     chunk = audio_np[i : i + chunk_size]
                     if len(chunk) > 0:
-                        frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
+                        frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
                         await source.capture_frame(frame)
                         total_samples_pushed += len(chunk)
                 await asyncio.sleep(0.01)
@@ -344,11 +344,11 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 start_time = time.time()
             import numpy as np
             audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
-            for i in range(0, len(audio_np), 1920):
+            for i in range(0, len(audio_np), 480):
                 if interrupt_event.is_set():
                     break
-                chunk = audio_np[i : i + 1920]
-                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=48000, num_channels=1, samples_per_channel=len(chunk))
+                chunk = audio_np[i : i + 480]
+                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
                 await source.capture_frame(frame)
                 total_samples_pushed += len(chunk)
 
@@ -356,7 +356,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
         
         # Wait for audio to drain
         if total_samples_pushed > 0 and not interrupt_event.is_set():
-            total_duration = total_samples_pushed / 48000
+            total_duration = total_samples_pushed / 24000
             elapsed = time.time() - start_time
             remaining = total_duration - elapsed
             if remaining > 0:
@@ -394,7 +394,7 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
     if not os.path.exists(wav_path):
         return
 
-    source = rtc.AudioSource(48000, 1)
+    source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
     publication = await room.local_participant.publish_track(track)
 
@@ -405,23 +405,23 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
         import numpy as np
 
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if framerate != 48000:
+        if framerate != 24000:
             audio_np = np.interp(
                 np.linspace(
-                    0, len(audio_np) - 1, int(len(audio_np) * (48000 / framerate))
+                    0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))
                 ),
                 np.arange(len(audio_np)),
                 audio_np,
             ).astype(np.int16)
 
-        silence = np.zeros(48000 + 24000, dtype=np.int16)
-        chunk_size = 1920
+        silence = np.zeros(24000 + 12000, dtype=np.int16)
+        chunk_size = 480
         for i in range(0, len(silence), chunk_size):
             chunk = silence[i : i + chunk_size]
             if len(chunk) > 0:
                 frame = rtc.AudioFrame(
                     data=chunk.tobytes(),
-                    sample_rate=48000,
+                    sample_rate=24000,
                     num_channels=1,
                     samples_per_channel=len(chunk),
                 )
@@ -432,12 +432,12 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
             if len(chunk) > 0:
                 frame = rtc.AudioFrame(
                     data=chunk.tobytes(),
-                    sample_rate=48000,
+                    sample_rate=24000,
                     num_channels=1,
                     samples_per_channel=len(chunk),
                 )
                 await source.capture_frame(frame)
-        await asyncio.sleep(len(audio_np) / 48000 + 0.5)
+        await asyncio.sleep(len(audio_np) / 24000 + 0.5)
     except Exception as e:
         logger.error(f"Error in play_greeting: {e}")
     finally:
@@ -650,7 +650,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
     wav_path = random.choice(wav_files)
     logger.info(f"[Transition] Selected transition audio: {os.path.basename(wav_path)}")
     
-    source = rtc.AudioSource(48000, 1)
+    source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("transition", source)
     publication = await room.local_participant.publish_track(track)
     
@@ -661,14 +661,14 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
             
         import numpy as np
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if framerate != 48000:
+        if framerate != 24000:
             audio_np = np.interp(
-                np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (48000 / framerate))),
+                np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
                 np.arange(len(audio_np)),
                 audio_np,
             ).astype(np.int16)
 
-        chunk_size = 1920
+        chunk_size = 480
         for i in range(0, len(audio_np), chunk_size):
             if interrupt_event.is_set():
                 logger.info("[VoiceInterrupt] Transition audio playback aborted due to interrupt.")
@@ -678,7 +678,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
             if len(chunk) > 0:
                 frame = rtc.AudioFrame(
                     data=chunk.tobytes(),
-                    sample_rate=48000,
+                    sample_rate=24000,
                     num_channels=1,
                     samples_per_channel=len(chunk),
                 )
@@ -686,7 +686,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
             await asyncio.sleep(0.01)
             
         if not interrupt_event.is_set():
-            await asyncio.sleep(len(audio_np) / 48000 + 0.1)
+            await asyncio.sleep(len(audio_np) / 24000 + 0.1)
             
     except asyncio.CancelledError:
         logger.info("[VoiceInterrupt] Transition audio task cancelled.")

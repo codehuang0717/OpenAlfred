@@ -10,7 +10,7 @@ from config import config
 
 logger = logging.getLogger("tts-client")
 
-async def get_tts_stream(text: str, target_sample_rate: int = 48000) -> AsyncGenerator[bytes, None]:
+async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGenerator[bytes, None]:
     """
     Generate audio stream from local TTS service and resample to target_sample_rate.
     Yields raw PCM chunks (int16).
@@ -33,9 +33,6 @@ async def get_tts_stream(text: str, target_sample_rate: int = 48000) -> AsyncGen
                     return
 
                 # PCM data from service is 16-bit LE, Mono
-                source_sample_rate = config.TTS_SAMPLE_RATE # 24000
-                resample_ratio = target_sample_rate / source_sample_rate
-                
                 # Buffer for incomplete frames if needed, but PCM usually datang in chunks of bytes
                 async for chunk in response.aiter_bytes(chunk_size=4096):
                     if not chunk:
@@ -43,18 +40,7 @@ async def get_tts_stream(text: str, target_sample_rate: int = 48000) -> AsyncGen
                     
                     # Convert bytes to int16 numpy array
                     audio_np = np.frombuffer(chunk, dtype=np.int16)
-                    
-                    # Resample using linear interpolation
-                    if target_sample_rate != source_sample_rate:
-                        target_len = int(len(audio_np) * resample_ratio)
-                        audio_resampled = np.interp(
-                            np.linspace(0, len(audio_np) - 1, target_len),
-                            np.arange(len(audio_np)),
-                            audio_np
-                        ).astype(np.int16)
-                        yield audio_resampled.tobytes()
-                    else:
-                        yield audio_np.tobytes()
+                    yield audio_np.tobytes()
 
                 # Final padding: 250ms of silence to ensure the last word isn't cut off by audio pipelines
                 silence_padding = np.zeros(int(target_sample_rate * 0.25), dtype=np.int16)
@@ -66,10 +52,10 @@ async def get_tts_stream(text: str, target_sample_rate: int = 48000) -> AsyncGen
 async def save_tts_to_file(text: str, output_path: str):
     """
     Generate full audio and save it as a WAV file.
-    Always saves at 48000Hz Mono for consistency with current system.
+    Always saves at 24000Hz Mono for consistency with current system.
     """
     audio_chunks = []
-    async for chunk in get_tts_stream(text, target_sample_rate=48000):
+    async for chunk in get_tts_stream(text, target_sample_rate=24000):
         audio_chunks.append(chunk)
     
     if not audio_chunks:
@@ -82,7 +68,7 @@ async def save_tts_to_file(text: str, output_path: str):
         with wave.open(output_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(48000)
+            wf.setframerate(24000)
             wf.writeframes(full_audio)
             
     await asyncio.to_thread(save_blocking)
