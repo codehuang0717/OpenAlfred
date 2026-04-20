@@ -376,7 +376,8 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
     """Play the greeting. Context injection is now handled dynamically by the Graph/Middleware."""
     if initial_speech:
         logger.info(f"Playing initial speech: {initial_speech}")
-        await play_tts(room, initial_speech, should_exit_event)
+        dummy_interrupt = asyncio.Event()
+        await play_tts(room, initial_speech, should_exit_event, dummy_interrupt)
         return
 
 
@@ -699,19 +700,31 @@ async def process_audio_safe(
     track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str
 ):
     audio_stream = rtc.AudioStream(track)
-    silero_vad = silero.VAD.load()
+    silero_vad = silero.VAD.load(min_silence_duration=1.0)
     vad_stream = silero_vad.stream()
     all_frames = []
     pre_buffer = collections.deque(maxlen=300)
     is_speaking = False
     session_id = room.name
 
+    interrupt_event = asyncio.Event()
+    current_tts_task = None
+    current_transition_task = None
+
     async def vad_logic():
-        nonlocal is_speaking, all_frames
+        nonlocal is_speaking, all_frames, current_tts_task, current_transition_task
         async for event in vad_stream:
             if event.type == vad.VADEventType.START_OF_SPEECH:
                 latency_tracker.start("vad_silence")
                 is_speaking = True
+                
+                logger.info("[VoiceInterrupt] Detected START_OF_SPEECH. Interrupting AI...")
+                interrupt_event.set()
+                if current_tts_task and not current_tts_task.done():
+                    current_tts_task.cancel()
+                if current_transition_task and not current_transition_task.done():
+                    current_transition_task.cancel()
+                    
                 all_frames = list(pre_buffer)
                 pre_buffer.clear()
             elif event.type == vad.VADEventType.END_OF_SPEECH:
@@ -719,18 +732,31 @@ async def process_audio_safe(
                 latency_tracker.start("vad_speech")
                 latency_tracker.start("end_to_end")
                 is_speaking = False
+                interrupt_event.clear()
                 if all_frames:
                     audio_data = b"".join([f.data for f in all_frames])
                     latency_tracker.end("vad_speech")
                     text = await transcribe_audio(audio_data, 48000, 1)
                     if text:
                         logger.info(f"========> [User Said]: {text}")
+                        
+                        current_transition_task = asyncio.create_task(
+                            play_transition_audio(room, interrupt_event)
+                        )
+                        
                         latency_tracker.start("agent_response")
                         resp_text = await call_agent(session_id, text, user_id)
                         latency_tracker.end("agent_response")
                         latency_tracker.end("end_to_end")
                         logger.info(f"========> [Agent Response]: {resp_text}")
-                        asyncio.create_task(play_tts(room, resp_text, should_exit))
+                        
+                        if current_transition_task and not current_transition_task.done():
+                            current_transition_task.cancel()
+                            
+                        if not interrupt_event.is_set():
+                            current_tts_task = asyncio.create_task(
+                                play_tts(room, resp_text, should_exit, interrupt_event)
+                            )
 
                         logger.info("========> [Latency Summary] =========")
                         logger.info(
