@@ -9,6 +9,8 @@ if not hasattr(sdk_logs, "LogData"):
 
 import asyncio
 import json
+import random
+import glob
 import logging
 import io
 import wave
@@ -622,6 +624,67 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Disconnecting agent from room and closing job...")
     await room.disconnect()
+
+
+async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
+    """Play a random transition audio file (e.g. '嗯', '让我想想')"""
+    transition_dir = config.ASSETS_DIR / "transitions"
+    if not transition_dir.exists():
+        logger.info("[Transition] Transition directory missing, skipping.")
+        return
+        
+    wav_files = glob.glob(str(transition_dir / "*.wav"))
+    if not wav_files:
+        logger.info("[Transition] No transition audio files found, skipping.")
+        return
+        
+    wav_path = random.choice(wav_files)
+    logger.info(f"[Transition] Selected transition audio: {os.path.basename(wav_path)}")
+    
+    source = rtc.AudioSource(48000, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("transition", source)
+    publication = await room.local_participant.publish_track(track)
+    
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            framerate = wf.getframerate()
+            audio_data = wf.readframes(wf.getnframes())
+            
+        import numpy as np
+        audio_np = np.frombuffer(audio_data, dtype=np.int16)
+        if framerate != 48000:
+            audio_np = np.interp(
+                np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (48000 / framerate))),
+                np.arange(len(audio_np)),
+                audio_np,
+            ).astype(np.int16)
+
+        chunk_size = 1920
+        for i in range(0, len(audio_np), chunk_size):
+            if interrupt_event.is_set():
+                logger.info("[VoiceInterrupt] Transition audio playback aborted due to interrupt.")
+                break
+                
+            chunk = audio_np[i : i + chunk_size]
+            if len(chunk) > 0:
+                frame = rtc.AudioFrame(
+                    data=chunk.tobytes(),
+                    sample_rate=48000,
+                    num_channels=1,
+                    samples_per_channel=len(chunk),
+                )
+                await source.capture_frame(frame)
+            await asyncio.sleep(0.01)
+            
+        if not interrupt_event.is_set():
+            await asyncio.sleep(len(audio_np) / 48000 + 0.1)
+            
+    except asyncio.CancelledError:
+        logger.info("[VoiceInterrupt] Transition audio task cancelled.")
+    except Exception as e:
+        logger.error(f"[Transition] Error playing transition audio: {e}")
+    finally:
+        await room.local_participant.unpublish_track(publication.sid)
 
 
 async def process_audio_safe(
