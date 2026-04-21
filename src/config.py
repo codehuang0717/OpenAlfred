@@ -52,6 +52,9 @@ class Config:
     # LangGraph Server
     LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://localhost:2024")
 
+    # Email Settings
+    EMAIL_ENCRYPTION_KEY = os.getenv("EMAIL_ENCRYPTION_KEY")
+
     # Context Management
     MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
     SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "15"))

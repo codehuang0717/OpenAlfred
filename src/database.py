@@ -81,30 +81,6 @@ async def init_db():
         """)
         await db.commit()
 
-async def get_thread_memory(thread_id: str) -> tuple[str, int]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute(
-            "SELECT conversation_summary, summarized_count FROM thread_memories WHERE thread_id = ?",
-            (thread_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                return row[0], row[1]
-            return "", 0
-
-async def set_thread_memory(thread_id: str, summary: str, count: int):
-    now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""
-            INSERT INTO thread_memories (thread_id, conversation_summary, summarized_count, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(thread_id) DO UPDATE SET
-                conversation_summary = excluded.conversation_summary,
-                summarized_count = excluded.summarized_count,
-                updated_at = excluded.updated_at
-        """, (thread_id, summary, count, now))
-        await db.commit()
-
         # Bark fields migrations
         for col in ["title", "subtitle", "sound"]:
             try:
@@ -136,7 +112,6 @@ async def set_thread_memory(thread_id: str, summary: str, count: int):
         except Exception:
             pass
 
-
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -155,8 +130,46 @@ async def set_thread_memory(thread_id: str, summary: str, count: int):
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS email_credentials (
+                account_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                email_address TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                imap_server TEXT,
+                imap_port INTEGER,
+                smtp_server TEXT,
+                smtp_port INTEGER,
+                encrypted_password TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
         await db.commit()
 
+async def get_thread_memory(thread_id: str) -> tuple[str, int]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT conversation_summary, summarized_count FROM thread_memories WHERE thread_id = ?",
+            (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return row[0], row[1]
+            return "", 0
+
+async def set_thread_memory(thread_id: str, summary: str, count: int):
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO thread_memories (thread_id, conversation_summary, summarized_count, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                conversation_summary = excluded.conversation_summary,
+                summarized_count = excluded.summarized_count,
+                updated_at = excluded.updated_at
+        """, (thread_id, summary, count, now))
+        await db.commit()
 
 # ─── User Functions ────────────────────────────────────────────────────────
 
@@ -543,4 +556,47 @@ async def reset_supervisor_state(user_id: str):
                 updated_at = ?
             WHERE user_id = ?
         """, (now, user_id))
+        await db.commit()
+
+# ─── Email Credentials Functions ───────────────────────────────────────────
+
+async def set_email_credentials(
+    account_id: str,
+    user_id: str,
+    email_address: str,
+    provider: str,
+    imap_server: str,
+    imap_port: int,
+    smtp_server: str,
+    smtp_port: int,
+    encrypted_password: str
+):
+    created_at = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO email_credentials 
+            (account_id, user_id, email_address, provider, imap_server, imap_port, smtp_server, smtp_port, encrypted_password, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM email_credentials WHERE account_id = ?), ?))
+            """,
+            (account_id, user_id, email_address, provider, imap_server, imap_port, smtp_server, smtp_port, encrypted_password, account_id, created_at)
+        )
+        await db.commit()
+
+async def get_email_credentials(user_id: str) -> list[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM email_credentials WHERE user_id = ?",
+            (user_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+async def delete_email_credentials(account_id: str, user_id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM email_credentials WHERE account_id = ? AND user_id = ?",
+            (account_id, user_id)
+        )
         await db.commit()

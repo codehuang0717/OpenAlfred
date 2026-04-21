@@ -38,7 +38,11 @@ from database import (
     get_user_by_username,
     get_user_by_id,
     update_user_last_login,
+    set_email_credentials,
+    get_email_credentials,
+    delete_email_credentials,
 )
+from email_service import verify_account, EmailServiceException
 from tools.reminder import check_and_send_pending_reminders
 from config import config
 from context_manager import ContextManager
@@ -689,6 +693,16 @@ async def set_model_selection_api(data: ModelSelectionRequest):
 class SupervisorConfigRequest(BaseModel):
     enabled: bool
 
+class EmailConfigRequest(BaseModel):
+    account_id: Optional[str] = None
+    email_address: str
+    provider: str
+    imap_server: str
+    imap_port: int
+    smtp_server: str
+    smtp_port: int
+    password: str
+
 @app.get("/api/supervisor/config")
 async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
     """Get the current supervisor enabled status."""
@@ -700,3 +714,87 @@ async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = 
     """Set the supervisor enabled status."""
     await set_setting("supervisor_enabled", str(data.enabled).lower())
     return {"status": "updated", "enabled": data.enabled}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EMAIL CONFIGURATION ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/emails/recent")
+async def get_recent_emails_api(user: dict = Depends(get_current_user)):
+    """Get recent emails from configured accounts."""
+    from email_service import get_recent_emails, EmailServiceException
+    try:
+        # Fetch from all configured accounts
+        emails = await get_recent_emails(user_id=user["id"], limit=15)
+        return emails
+    except EmailServiceException as e:
+        # Return empty list if no config or failed
+        return []
+    except Exception as e:
+        logger.error(f"Error fetching recent emails: {e}")
+        return []
+
+@app.get("/api/emails/{email_id}")
+async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get_current_user)):
+    """Get a specific email's content."""
+    from email_service import read_email, EmailServiceException
+    try:
+        email_data = await read_email(user_id=user["id"], email_id=email_id, account_id=account_id)
+        return email_data
+    except EmailServiceException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error fetching email {email_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/email/config")
+async def get_email_configs_api(user: dict = Depends(get_current_user)):
+    """Get the current user's email configurations."""
+    creds = await get_email_credentials(user["id"])
+    # Do not return encrypted passwords to the frontend
+    for cred in creds:
+        if "encrypted_password" in cred:
+            del cred["encrypted_password"]
+    return creds
+
+@app.post("/api/email/config")
+async def set_email_config_api(req: EmailConfigRequest, user: dict = Depends(get_current_user)):
+    """Add or update an email configuration after verifying."""
+    from utils.crypto import encrypt_password
+    
+    try:
+        # Verify first
+        await verify_account(
+            imap_server=req.imap_server,
+            imap_port=req.imap_port,
+            smtp_server=req.smtp_server,
+            smtp_port=req.smtp_port,
+            email_address=req.email_address,
+            password=req.password
+        )
+    except EmailServiceException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    encrypted_pw = encrypt_password(req.password)
+    account_id = req.account_id or str(uuid.uuid4())
+    
+    await set_email_credentials(
+        account_id=account_id,
+        user_id=user["id"],
+        email_address=req.email_address,
+        provider=req.provider,
+        imap_server=req.imap_server,
+        imap_port=req.imap_port,
+        smtp_server=req.smtp_server,
+        smtp_port=req.smtp_port,
+        encrypted_password=encrypted_pw
+    )
+    
+    return {"status": "success", "account_id": account_id}
+
+@app.delete("/api/email/config/{account_id}")
+async def delete_email_config_api(account_id: str, user: dict = Depends(get_current_user)):
+    """Delete an email configuration."""
+    await delete_email_credentials(account_id=account_id, user_id=user["id"])
+    return {"status": "deleted"}
+
