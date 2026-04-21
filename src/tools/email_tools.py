@@ -124,43 +124,22 @@ async def read_email(
 
 
 @tool
-async def draft_and_send_email(
-    runtime: ToolRuntime, 
-    to_address: str, 
-    subject: str, 
-    body: str,
-    account_id: Optional[str] = None
-) -> Command:
+async def get_email_accounts(runtime: ToolRuntime) -> Command:
     """
-    Drafts and sends an email on behalf of the user.
-    If the user has multiple accounts, you should ask or specify the account_id to send from.
-    Always confirm with the user before sending.
+    Get a list of configured email accounts for the user.
+    Use this to get the account_id before drafting an email, so you know which account to send from.
     """
     user_id = await _get_user_id(runtime)
     try:
-        await _draft_and_send_email(
-            user_id=user_id, 
-            to=to_address, 
-            subject=subject, 
-            body=body, 
-            account_id=account_id
-        )
+        from database import get_email_credentials
+        creds = await get_email_credentials(user_id)
+        accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
+        
         return Command(
             update={
                 "messages": [
                     ToolMessage(
-                        content=f"Successfully sent email to {to_address} with subject '{subject}'.",
-                        tool_call_id=runtime.tool_call_id,
-                    )
-                ]
-            }
-        )
-    except EmailServiceException as e:
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        content=f"Failed to send email: {str(e)}",
+                        content=json.dumps({"accounts": accounts}),
                         tool_call_id=runtime.tool_call_id,
                     )
                 ]
@@ -171,16 +150,15 @@ async def draft_and_send_email(
             update={
                 "messages": [
                     ToolMessage(
-                        content=f"An unexpected error occurred while sending email: {str(e)}.",
+                        content=f"An unexpected error occurred: {str(e)}.",
                         tool_call_id=runtime.tool_call_id,
                     )
                 ]
             }
         )
 
-
 email_tools = [
     get_recent_emails,
     read_email,
-    draft_and_send_email
+    get_email_accounts
 ]

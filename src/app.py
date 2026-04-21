@@ -747,6 +747,31 @@ async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get
         logger.error(f"Error fetching email {email_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+class EmailSendRequest(BaseModel):
+    account_id: str
+    to_address: str
+    subject: str
+    body: str
+
+@app.post("/api/emails/send")
+async def send_email_api(req: EmailSendRequest, user: dict = Depends(get_current_user)):
+    """Send an email."""
+    from email_service import draft_and_send_email, EmailServiceException
+    try:
+        await draft_and_send_email(
+            user_id=user["id"],
+            to=req.to_address,
+            subject=req.subject,
+            body=req.body,
+            account_id=req.account_id
+        )
+        return {"status": "success"}
+    except EmailServiceException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error sending email: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/api/email/config")
 async def get_email_configs_api(user: dict = Depends(get_current_user)):
     """Get the current user's email configurations."""
