@@ -18,3 +18,4 @@ src/utils/__pycache__/__init__.cpython-313.pyc
 src/utils/__pycache__/time_utils.cpython-311.pyc
 src/utils/__pycache__/time_utils.cpython-313.pyc
 tests/test_supervisor.py
+agent_chrome_profile/

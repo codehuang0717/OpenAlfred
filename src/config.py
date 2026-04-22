@@ -63,6 +63,10 @@ class Config:
     # Timezone Settings
     TIMEZONE = os.getenv("TIMEZONE", "Europe/London")
 
+    # Browser Control Settings
+    CHROME_CDP_URL = os.getenv("CHROME_CDP_URL", "http://localhost:9222")
+
+
     # Supervisor Settings
     SUPERVISOR_INTERVAL = int(os.getenv("SUPERVISOR_INTERVAL", "600")) # 10 minutes
     SUPERVISOR_PHONE_NUMBER = os.getenv("SUPERVISOR_PHONE_NUMBER", "100")

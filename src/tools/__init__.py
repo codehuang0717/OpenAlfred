@@ -4,6 +4,7 @@ from tools.reminder import reminder_tools
 from tools.call_user import call_tools
 from tools.eye import search_screen_history, get_current_screen_context
 from tools.email_tools import email_tools
+from tools.browser import browser_tools
 
 ALL_TOOLS = (
     todo_tools + 
@@ -11,5 +12,6 @@ ALL_TOOLS = (
     call_tools + 
     memTools +
     email_tools +
+    browser_tools +
     [search_screen_history, get_current_screen_context]
 )
