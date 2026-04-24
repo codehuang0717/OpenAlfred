@@ -16,6 +16,7 @@ class Config:
     # LLM Settings
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
     
     # Memory Settings
     MEM0_API_KEY = os.getenv("MEM0_API_KEY")

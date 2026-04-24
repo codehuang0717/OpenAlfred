@@ -172,14 +172,14 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
         if call_type == "outbound" and initial_speech:
             context = (
                 f"[系统指示] 你主动拨打了此电话。拨号动机: \"{initial_speech}\"。"
-                "请基于此动机与用户对话。使用简洁、自然的口语回复，严禁使用Markdown或-或空格等特殊符号，对于日期时间等信息，请使用中文口语方式表达，而不是数字日期格式。"
+                "请基于此动机与用户对话。使用简洁、自然的口语回复，严禁使用Markdown或-或空格等特殊符号，对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分。"
             )
             input_messages.append({"role": "system", "content": context})
             input_messages.append({"role": "assistant", "content": initial_speech})
         elif call_type == "outbound":
-            input_messages.append({"role": "system", "content": "[系统指示] 你主动呼叫了用户。请以友好的方式开始对话。对于日期时间等信息，请使用中文口语方式表达，而不是数字日期格式，严禁使用Markdown或-或空格等特殊符号。"})
+            input_messages.append({"role": "system", "content": "[系统指示] 你主动呼叫了用户。请以友好的方式开始对话。对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分，严禁使用Markdown或-或空格等特殊符号。"})
         else:
-            input_messages.append({"role": "system", "content": "[系统指示] 用户呼入了你的热线。请以友好的方式接待。对于日期时间等信息，请使用中文口语方式表达，而不是数字日期格式，严禁使用Markdown或-或空格等特殊符号。"})
+            input_messages.append({"role": "system", "content": "[系统指示] 用户呼入了你的热线。请以友好的方式接待。对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分，严禁使用Markdown或-或空格等特殊符号。"})
         
         # Mark as no longer fresh
         session_data["is_fresh"] = False

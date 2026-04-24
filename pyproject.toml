@@ -31,6 +31,8 @@ dependencies = [
     "aiosmtplib>=3.0.1",
     "aioimaplib>=1.0.1",
     "cryptography>=42.0.5",
+    "langchain-community>=0.4.1",
+    "tavily-python>=0.7.23",
 ]
 
 [build-system]
