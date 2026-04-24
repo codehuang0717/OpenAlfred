@@ -207,8 +207,9 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
         latency_tracker.start("llm_graph_invoke")
         
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{config.LANGGRAPH_API_URL}/threads/{thread_uuid}/runs/wait",
+            async with client.stream(
+                "POST",
+                f"{config.LANGGRAPH_API_URL}/threads/{thread_uuid}/runs/stream",
                 headers=headers,
                 json={
                     "assistant_id": "agent",
@@ -216,7 +217,7 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                         "messages": input_messages,
                         "model_selection": model,
                     },
-
+                    "stream_mode": ["updates"],
                     "config": {
                         "configurable": {
                             "thread_id": thread_uuid,
@@ -231,32 +232,56 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                         "room_name": session_id,
                         "initial_speech": initial_speech,
                     },
-
                 },
                 timeout=60.0,
-            )
-        
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"LG Server error ({response.status_code}): {error_text[:200]}")
+                    yield "message", "抱歉，我暂时无法处理你的请求。"
+                    return
+
+                final_text = ""
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            # logger.info(f"[call_agent Debug] {line[6:]}")
+                            data = json.loads(line[6:])
+                            if isinstance(data, dict):
+                                for node_name, state_update in data.items():
+                                    if node_name == "agent" and "messages" in state_update:
+                                        # Check the newly added messages
+                                        messages = state_update["messages"]
+                                        if messages:
+                                            last_msg = messages[-1]
+                                            if last_msg.get("type") == "ai":
+                                                tool_calls = last_msg.get("tool_calls", [])
+                                                if tool_calls:
+                                                    for tc in tool_calls:
+                                                        name = tc.get("name")
+                                                        if name:
+                                                            yield "tool_call", name
+                                                
+                                                # Check if there is text content
+                                                content = last_msg.get("content", "")
+                                                if isinstance(content, list):
+                                                    content = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+                                                if content and content.strip():
+                                                    final_text = content.strip()
+                        except json.JSONDecodeError:
+                            continue
+
         latency_tracker.end("llm_graph_invoke")
         latency_tracker.end("llm_total")
         
-        if resp.status_code != 200:
-            logger.error(f"LG Server error ({resp.status_code}): {resp.text[:200]}")
-            return "抱歉，我暂时无法处理你的请求。"
-        
-        result = resp.json()
-        messages = result.get("messages", [])
-        for msg in reversed(messages):
-            if msg.get("type") == "ai":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    content = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
-                if content and content.strip():
-                    return content.strip()
-        
-        return "收到"
+        if final_text:
+            yield "message", final_text
+        else:
+            yield "message", "收到"
+            
     except Exception as e:
         logger.error(f"Voice Agent Error: {e}", exc_info=True)
-        return "抱歉，我暂时无法处理你的请求。"
+        yield "message", "抱歉，我暂时无法处理你的请求。"
 
 
 async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -> str:
@@ -635,19 +660,28 @@ async def entrypoint(ctx: JobContext):
     await room.disconnect()
 
 
-async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
-    """Play a random transition audio file (e.g. '嗯', '让我想想')"""
+async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, tool_name: str = None):
+    """Play a transition audio file based on the tool called, or a generic fallback."""
     transition_dir = config.ASSETS_DIR / "transitions"
     if not transition_dir.exists():
         logger.info("[Transition] Transition directory missing, skipping.")
         return
         
-    wav_files = glob.glob(str(transition_dir / "*.wav"))
-    if not wav_files:
-        logger.info("[Transition] No transition audio files found, skipping.")
-        return
-        
-    wav_path = random.choice(wav_files)
+    wav_path = None
+    if tool_name:
+        specific_path = transition_dir / f"{tool_name}.wav"
+        if specific_path.exists():
+            wav_path = specific_path
+            
+    if not wav_path:
+        generic_files = ["checking.wav", "hmm.wav", "thinking.wav", "wait.wav", "working.wav"]
+        available_generics = [f for f in generic_files if (transition_dir / f).exists()]
+        if available_generics:
+            wav_path = transition_dir / random.choice(available_generics)
+        else:
+            logger.info("[Transition] No valid generic transition audio files found, skipping.")
+            return
+            
     logger.info(f"[Transition] Selected transition audio: {os.path.basename(wav_path)}")
     
     source = rtc.AudioSource(24000, 1)
@@ -655,7 +689,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event):
     publication = await room.local_participant.publish_track(track)
     
     try:
-        with wave.open(wav_path, "rb") as wf:
+        with wave.open(str(wav_path), "rb") as wf:
             framerate = wf.getframerate()
             audio_data = wf.readframes(wf.getnframes())
             
@@ -740,23 +774,39 @@ async def process_audio_safe(
                     if text:
                         logger.info(f"========> [User Said]: {text}")
                         
-                        current_transition_task = asyncio.create_task(
-                            play_transition_audio(room, interrupt_event)
-                        )
+                        # Option A: No immediate random transition audio. Wait for tool call.
                         
                         latency_tracker.start("agent_response")
-                        resp_text = await call_agent(session_id, text, user_id)
+                        
+                        final_resp_text = ""
+                        async for event_type, payload in call_agent(session_id, text, user_id):
+                            if interrupt_event.is_set():
+                                break
+                                
+                            if event_type == "tool_call":
+                                logger.info(f"[Agent Tool Call]: {payload}")
+                                if current_transition_task and not current_transition_task.done():
+                                    current_transition_task.cancel()
+                                current_transition_task = asyncio.create_task(
+                                    play_transition_audio(room, interrupt_event, tool_name=payload)
+                                )
+                            elif event_type == "message":
+                                final_resp_text = payload
+                                
                         latency_tracker.end("agent_response")
                         latency_tracker.end("end_to_end")
-                        logger.info(f"========> [Agent Response]: {resp_text}")
+                        logger.info(f"========> [Agent Response]: {final_resp_text}")
                         
-                        if current_transition_task and not current_transition_task.done():
-                            current_transition_task.cancel()
-                            
-                        if not interrupt_event.is_set():
-                            current_tts_task = asyncio.create_task(
-                                play_tts(room, resp_text, should_exit, interrupt_event)
-                            )
+                        if not interrupt_event.is_set() and final_resp_text:
+                            # User requested: transition words should NOT be interrupted by the final TTS
+                            if current_transition_task and not current_transition_task.done():
+                                logger.info("Waiting for transition audio to finish before playing TTS...")
+                                await current_transition_task
+                                
+                            if not interrupt_event.is_set():
+                                current_tts_task = asyncio.create_task(
+                                    play_tts(room, final_resp_text, should_exit, interrupt_event)
+                                )
 
                         logger.info("========> [Latency Summary] =========")
                         logger.info(
