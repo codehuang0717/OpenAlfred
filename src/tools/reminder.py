@@ -18,6 +18,8 @@ from database import (
     mark_reminder_sent,
     get_all_reminders,
     delete_reminder as db_delete_reminder,
+    get_pending_todo_notifications,
+    mark_todo_notification_sent,
     AUDIO_CACHE_DIR,
 )
 
@@ -50,6 +52,8 @@ async def pre_render_tts(text: str, filename: str) -> str:
         traceback.print_exc()
         return ""
 
+from notification_service import notification_service
+
 async def _send_bark_notification(
     body: str,
     title: Optional[str] = None,
@@ -57,37 +61,18 @@ async def _send_bark_notification(
     level: str = "active",
     sound: Optional[str] = None,
 ) -> str:
-    """Internal function to send Bark notification."""
-    if not config.BARK_URL:
-        print("[Bark] ERROR: BARK_URL not set in config.")
-        return "error: BARK_URL not set"
-    
-    try:
-        import urllib.parse
-        # Construct Bark URL: host/key/[title]/[subtitle]/body
-        url_parts = [config.BARK_URL.rstrip("/")]
-        if title: url_parts.append(urllib.parse.quote(title))
-        if subtitle: url_parts.append(urllib.parse.quote(subtitle))
-        url_parts.append(urllib.parse.quote(body))
-        
-        url = "/".join(url_parts)
-        params = {"level": level}
-        if sound:
-            params["sound"] = sound
+    """Internal function to send Bark notification using the new NotificationService."""
+    success = await notification_service.send_bark_notification(
+        body=body,
+        title=title,
+        subtitle=subtitle,
+        level=level, # type: ignore
+        sound=sound,
+        group="OpenAlfred-Reminders",
+        icon="https://cdn-icons-png.flaticon.com/512/3602/3602123.png" # Bell icon
+    )
+    return "success" if success else "error"
 
-        print(f"[Bark] Sending request to: {url} with params {params}")
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params)
-
-        if response.status_code == 200:
-            print("[Bark] SUCCESS: Notification sent.")
-            return "success"
-        else:
-            print(f"[Bark] ERROR: {response.status_code} - {response.text}")
-            return f"error: {response.text}"
-    except Exception as e:
-        print(f"[Bark] EXCEPTION: {e}")
-        return f"error: {str(e)}"
 
 def _get_user_id(runtime: ToolRuntime) -> str:
     """Extract user_id from RunnableConfig populated by LangGraph Auth."""
@@ -241,8 +226,33 @@ async def check_and_send_pending_reminders():
     except Exception as e:
         print(f"[Scheduler] ERROR: {e}")
 
+async def check_and_send_todo_notifications():
+    """Scan and send notifications for scheduled Todos."""
+    try:
+        pending_todos = await get_pending_todo_notifications()
+        for todo in pending_todos:
+            print(f"[Scheduler] Sending notification for Todo: {todo['title']}")
+            success = await notification_service.send_todo_reminder(todo)
+            if success:
+                await mark_todo_notification_sent(todo['id'])
+    except Exception as e:
+        print(f"[Scheduler] Todo Notification ERROR: {e}")
+
+@tool
+async def test_notification(runtime: ToolRuntime) -> str:
+    """发送一条测试通知到 Bark，验证配置是否正确。"""
+    success = await notification_service.send_bark_notification(
+        body="这是一条来自 OpenAlfred 的测试通知！如果你看到了这条消息，说明你的 Bark 配置已经完美运行。🚀",
+        title="OpenAlfred 联通成功",
+        icon="https://cdn-icons-png.flaticon.com/512/190/190411.png", # Success check icon
+        group="OpenAlfred-System",
+        sound="glass"
+    )
+    return "测试通知已发送，请检查手机。" if success else "发送失败，请检查 BARK_URL 配置。"
+
 reminder_tools = [
     add_reminder,
     list_reminders,
     cancel_reminder,
+    test_notification,
 ]

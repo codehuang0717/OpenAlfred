@@ -24,7 +24,9 @@ async def init_db():
                 deleted INTEGER DEFAULT 0,
                 notes TEXT DEFAULT '',
                 expected_completion_at TEXT,
-                scheduled_start_at TEXT
+                scheduled_start_at TEXT,
+                notification_sent INTEGER DEFAULT 0,
+                user_id TEXT DEFAULT 'default'
             )
         """)
 
@@ -105,6 +107,13 @@ async def init_db():
             )
         except Exception:
             pass
+        try:
+            await db.execute(
+                "ALTER TABLE todos ADD COLUMN notification_sent INTEGER DEFAULT 0"
+            )
+        except Exception:
+            pass
+
         try:
             await db.execute(
                 "ALTER TABLE reminders ADD COLUMN user_id TEXT DEFAULT 'default'"
@@ -429,6 +438,29 @@ async def get_pending_reminders():
                 filtered.append(r)
 
     return filtered
+
+
+async def get_pending_todo_notifications():
+    """Scan todos that are scheduled to start but haven't sent a notification."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Find todos where scheduled_start_at <= now and notification_sent = 0
+        async with db.execute(
+            "SELECT * FROM todos WHERE status = 'pending' AND deleted = 0 AND notification_sent = 0 AND scheduled_start_at IS NOT NULL AND scheduled_start_at <= ?",
+            (now,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def mark_todo_notification_sent(id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE todos SET notification_sent = 1 WHERE id = ?",
+            (id,),
+        )
+        await db.commit()
 
 
 async def mark_reminder_sent(id: str):

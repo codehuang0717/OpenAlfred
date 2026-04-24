@@ -4,51 +4,47 @@ from config import config
 
 def localize_to_utc(time_str: str) -> str:
     """
-    Standardizes a time string from the LLM into a UTC ISO-8601 string (ISO-Z).
-    
-    1. Strips any existing 'Z' (as LLMs often add it to local times by mistake).
-    2. Interprets the naive time in the user's localized context (Europe/London).
-    3. Converts it to UTC.
-    4. Returns a standard ISO-Z string.
-    
-    Args:
-        time_str: An ISO-like time string (e.g., '2026-04-16T15:00:00' or '2026-04-16T15:00:00Z')
-        
+    Normalize any time string into a canonical UTC ISO-8601 string with 'Z' suffix.
+
+    Handles three input formats:
+      1. Naive (no tz info, e.g. '2026-04-24T15:00:00')
+         → Interpreted as the user's local timezone (config.TIMEZONE, e.g. Europe/London)
+         → Converted to UTC.
+      2. 'Z'-suffixed (e.g. '2026-04-24T14:00:00Z')
+         → Parsed as UTC, re-formatted for consistency.
+      3. Offset-aware (e.g. '2026-04-24T15:00:00+01:00')
+         → Parsed with the given offset, converted to UTC.
+
+    This function is safe to call multiple times on the same value (idempotent).
+
     Returns:
-        A UTC ISO-8601 string ending in 'Z'.
-        
+        A UTC ISO-8601 string ending in 'Z', e.g. '2026-04-24T14:00:00Z'.
+
     Raises:
         ValueError: If the time_str cannot be parsed.
     """
     if not time_str:
         return ""
-    
-    # 幂等性检查：如果已经是 UTC 格式 (以 'Z' 结尾或包含 '+')，直接返回
-    if time_str.endswith('Z') or '+' in time_str:
-        return time_str
-        
+
+    clean = time_str.strip()
+
     try:
-        # Strip 'Z' if present, because we want to mandate the local interpretation 
-        # unless we explicitly decide to support multiple timezones in the future.
-        naive_str = time_str.rstrip('Z')
-        
-        # Handle cases like "2026-04-16 10:00:00" vs "2026-04-16T10:00:00"
-        if " " in naive_str and "T" not in naive_str:
-            dt_naive = datetime.fromisoformat(naive_str.replace(" ", "T"))
+        if clean.endswith('Z'):
+            # Already marked as UTC — parse it properly
+            dt = datetime.fromisoformat(clean.replace('Z', '+00:00'))
+        elif '+' in clean[10:] or (clean.count('-') > 2 and 'T' in clean):
+            # Contains an explicit offset like +01:00 or -05:00
+            dt = datetime.fromisoformat(clean)
         else:
-            dt_naive = datetime.fromisoformat(naive_str)
-            
-        # Use config's centralized timezone (Europe/London)
-        user_tz = ZoneInfo(config.TIMEZONE)
-        
-        # Localize the naive time to London (handling BST/GMT correctly)
-        localized_dt = dt_naive.replace(tzinfo=user_tz)
-        
-        # Convert to UTC
-        utc_dt = localized_dt.astimezone(timezone.utc)
-        
-        # Return standard ISO-8601 with Z suffix
+            # Naive string — interpret as user's configured local timezone
+            normalized = clean.replace(' ', 'T') if (' ' in clean and 'T' not in clean) else clean
+            dt_naive = datetime.fromisoformat(normalized)
+            user_tz = ZoneInfo(config.TIMEZONE)
+            dt = dt_naive.replace(tzinfo=user_tz)
+
+        # Convert to UTC and return canonical format
+        utc_dt = dt.astimezone(timezone.utc)
         return utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        
+
     except Exception as e:
         raise ValueError(f"Could not parse time string '{time_str}': {e}")
