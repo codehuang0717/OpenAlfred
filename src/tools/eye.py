@@ -1,6 +1,6 @@
 import httpx
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("eye-tool")
@@ -84,36 +84,31 @@ async def get_recent_ocr_text(minutes: int = 10) -> str:
 from langchain.tools import tool
 
 @tool
-async def search_screen_history(query: str) -> str:
-    """
-    Search historical screen content (OCR) for a specific query.
-    Useful for 'What did I see earlier?' or 'When did I look at X?'
-    """
-    try:
-        async with httpx.AsyncClient() as client:
-            params = {
-                "q": query,
-                "limit": 10,
-                "content_type": "ocr"
-            }
-            resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
-            if resp.status_code == 200:
-                items = resp.json().get("data", [])
-                if not items: return f"No results found for '{query}'"
-                
-                results = []
-                for item in items:
-                    ts = item.get("content", {}).get("timestamp", "unknown")
-                    txt = item.get("content", {}).get("text", "")
-                    results.append(f"[{ts}] {txt}")
-                return "\n---\n".join(results)
-            return f"Error: {resp.text}"
-    except Exception as e:
-        return f"Error querying screen history: {e}"
+async def view_screen(mode: Literal["current", "history"] = "current", query: str = "") -> str:
+    """View user's screen content. mode='current' for live screen (last 2min OCR), mode='history' to search past screen text by query."""
+    if mode == "history" and query:
+        try:
+            async with httpx.AsyncClient() as client:
+                params = {
+                    "q": query,
+                    "limit": 10,
+                    "content_type": "ocr"
+                }
+                resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
+                if resp.status_code == 200:
+                    items = resp.json().get("data", [])
+                    if not items: return f"No results found for '{query}'"
+                    
+                    results = []
+                    for item in items:
+                        ts = item.get("content", {}).get("timestamp", "unknown")
+                        txt = item.get("content", {}).get("text", "")
+                        results.append(f"[{ts}] {txt}")
+                    return "\n---\n".join(results)
+                return f"Error: {resp.text}"
+        except Exception as e:
+            return f"Error querying screen history: {e}"
+    else:
+        return await get_recent_ocr_text(minutes=2)
 
-@tool
-async def get_current_screen_context() -> str:
-    """
-    Get a summary of what is currently on the user's screen (last 2 minutes of OCR).
-    """
-    return await get_recent_ocr_text(minutes=2)
+screen_tools = [view_screen]

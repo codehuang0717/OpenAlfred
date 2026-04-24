@@ -27,7 +27,7 @@ def _get_user_id(runtime: ToolRuntime) -> str:
 
 @tool
 def search_memory(query: str, runtime: ToolRuntime) -> str:
-    """搜索用户的记忆和偏好"""
+    """Search user's long-term memory and preferences."""
     user_id = _get_user_id(runtime)
     results = mem0_client.search(query=query, filters={"AND": [{"user_id": user_id}]})
     if results and isinstance(results, dict):
@@ -39,21 +39,11 @@ def search_memory(query: str, runtime: ToolRuntime) -> str:
 
 @tool
 def add_memory(content: str, runtime: ToolRuntime) -> str:
-    """存储用户的交互内容到记忆"""
+    """Store user interaction content into long-term memory."""
     user_id = _get_user_id(runtime)
     messages = [{"role": "user", "content": content}]
     result = mem0_client.add(messages=messages, user_id=user_id)
     return str(result)
 
 
-@tool
-def delete_memory(id: str, runtime: ToolRuntime) -> str:
-    """删除指定的记忆"""
-    try:
-        mem0_client.delete(memory_id=id)
-        return f"Successfully deleted memory: {id}"
-    except Exception as e:
-        return f"Error deleting memory: {str(e)}"
-
-
-memTools = [search_memory, add_memory, delete_memory]
+memTools = [search_memory, add_memory]

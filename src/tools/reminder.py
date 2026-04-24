@@ -108,22 +108,7 @@ async def add_reminder(
     delivery_method: Literal["push", "call"] = "push",
     call_greeting: Optional[str] = None,
 ) -> Command:
-    """
-    设置一个定时提醒。
-    
-    Args:
-        body: 提醒的内容 (必须)
-        scheduled_at: 提醒的绝对时间字符串 (必须)。
-                      基于系统提供的 "Current Time" 计算。
-                      注意：务必提供用户所在的本地时间 (Europe/London)。
-                      不要带 "Z" 或时区偏移。例如: "2026-04-08T15:30:00"
-        title: 提醒标题 (可选)
-        subtitle: 提醒副标题 (可选)
-        level: 推送优先级 - "active" (默认), "critical", "timeSensitive", 或 "passive"
-        sound: 推送声音名称 (可选)
-        delivery_method: "push" (Bark推送) 或 "call" (电话呼叫通知)
-        call_greeting: 如果是电话通知，播放的问候语内容
-    """
+    """Set a timed reminder. scheduled_at must be local time without Z or offset, e.g. '2026-04-08T15:30:00'. Use delivery_method='call' for wake-up/urgent reminders."""
     try:
         user_id = _get_user_id(runtime)
         reminder_id = str(uuid.uuid4())
@@ -170,7 +155,7 @@ async def add_reminder(
 
 @tool
 async def list_reminders(runtime: ToolRuntime) -> str:
-    """列出所有已设置的提醒任务。"""
+    """List all scheduled reminders."""
     try:
         user_id = _get_user_id(runtime)
         reminders = await get_all_reminders(user_id=user_id)
@@ -193,10 +178,7 @@ async def update_reminder(
     title: Optional[str] = None,
     body: Optional[str] = None,
 ) -> Command:
-    """
-    修改一个现有的提醒任务。
-    需要传入 ID (或 ID 的前8位)。
-    """
+    """Update an existing reminder by ID (or first 8 chars of ID)."""
     try:
         user_id = _get_user_id(runtime)
         # 支持短 ID 匹配
@@ -235,7 +217,7 @@ async def update_reminder(
 
 @tool
 async def cancel_reminder(runtime: ToolRuntime, id: str) -> Command:
-    """取消一个还没发送的提醒任务。需要传入 ID (或 ID 的前8位)。"""
+    """Cancel a pending reminder by ID (or first 8 chars of ID)."""
     try:
         user_id = _get_user_id(runtime)
         # 支持短 ID 匹配
@@ -314,22 +296,9 @@ async def check_and_send_todo_notifications():
     except Exception as e:
         print(f"[Scheduler] Todo Notification ERROR: {e}")
 
-@tool
-async def test_notification(runtime: ToolRuntime) -> str:
-    """发送一条测试通知到 Bark，验证配置是否正确。"""
-    success = await notification_service.send_bark_notification(
-        body="这是一条来自 OpenAlfred 的测试通知！如果你看到了这条消息，说明你的 Bark 配置已经完美运行。🚀",
-        title="OpenAlfred 联通成功",
-        icon="https://cdn-icons-png.flaticon.com/512/190/190411.png", # Success check icon
-        group="OpenAlfred-System",
-        sound="glass"
-    )
-    return "测试通知已发送，请检查手机。" if success else "发送失败，请检查 BARK_URL 配置。"
-
 reminder_tools = [
     add_reminder,
     list_reminders,
     update_reminder,
     cancel_reminder,
-    test_notification,
 ]

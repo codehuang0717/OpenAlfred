@@ -27,11 +27,7 @@ def get_chrome_path():
 
 @tool
 async def web_browser_task(runtime: ToolRuntime, task_description: str) -> Command:
-    """
-    Use this tool to surf the web, interact with websites, or extract information.
-    Provide a detailed task_description of what needs to be accomplished on the web.
-    If you need to login, just ask to go to the page and the user's local session will be used.
-    """
+    """Browse the web, interact with websites, or extract info. Provide a detailed task_description."""
     logger.info(f"Starting browser task: {task_description}")
     
     # 1. Get the LLM using browser-use's specific wrapper to avoid Pydantic issues

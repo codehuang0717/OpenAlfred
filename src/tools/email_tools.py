@@ -17,14 +17,17 @@ async def get_recent_emails(
     limit: int = 10, 
     account_id: Optional[str] = None
 ) -> Command:
-    """
-    Get a list of recent emails from the user's inbox.
-    Returns the subject, sender, date, and email ID for the most recent emails.
-    Useful for checking new emails or summarizing recent inbox activity.
-    """
+    """Get recent emails from user's inbox. Returns subject, sender, date, email ID, and available account info."""
     user_id = await _get_user_id(runtime)
     try:
         emails = await _get_recent_emails(user_id=user_id, limit=limit, account_id=account_id)
+        # Also fetch account info so LLM doesn't need a separate tool call
+        try:
+            from database import get_email_credentials
+            creds = await get_email_credentials(user_id)
+            accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
+        except Exception:
+            accounts = []
         # Format for rich rendering in the frontend
         return Command(
             update={
@@ -32,7 +35,8 @@ async def get_recent_emails(
                     ToolMessage(
                         content=json.dumps({
                             "type": "email_list",
-                            "emails": emails
+                            "emails": emails,
+                            "accounts": accounts
                         }),
                         tool_call_id=runtime.tool_call_id,
                     )
@@ -69,11 +73,7 @@ async def read_email(
     email_id: str, 
     account_id: str
 ) -> Command:
-    """
-    Read the full content of a specific email by its ID and Account ID.
-    Use this when the user asks to read, summarize, or translate a specific email from the recent emails list.
-    You MUST provide both the email_id and the account_id returned from get_recent_emails.
-    """
+    """Read the full content of a specific email. Requires both email_id and account_id from get_recent_emails."""
     user_id = await _get_user_id(runtime)
     try:
         email_data = await _read_email(user_id=user_id, email_id=email_id, account_id=account_id)
@@ -123,42 +123,7 @@ async def read_email(
         )
 
 
-@tool
-async def get_email_accounts(runtime: ToolRuntime) -> Command:
-    """
-    Get a list of configured email accounts for the user.
-    Use this to get the account_id before drafting an email, so you know which account to send from.
-    """
-    user_id = await _get_user_id(runtime)
-    try:
-        from database import get_email_credentials
-        creds = await get_email_credentials(user_id)
-        accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
-        
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        content=json.dumps({"accounts": accounts}),
-                        tool_call_id=runtime.tool_call_id,
-                    )
-                ]
-            }
-        )
-    except Exception as e:
-         return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        content=f"An unexpected error occurred: {str(e)}.",
-                        tool_call_id=runtime.tool_call_id,
-                    )
-                ]
-            }
-        )
-
 email_tools = [
     get_recent_emails,
     read_email,
-    get_email_accounts
 ]

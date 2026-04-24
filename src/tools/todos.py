@@ -67,9 +67,7 @@ async def sync_todos_to_state(runtime: ToolRuntime):
 
 @tool
 async def get_todos(runtime: ToolRuntime) -> list[TodoDict]:
-    """
-    Get all current todos from the database.
-    """
+    """Get all current todos."""
     user_id = await _get_user_id(runtime)
     todos = await get_all_todos(user_id=user_id)
     return todos
@@ -85,9 +83,7 @@ async def add_todo(
     expected_completion_at: Optional[str] = None,
     scheduled_start_at: Optional[str] = None,
 ) -> Command:
-    """
-    Add a new todo to the list.
-    """
+    """Add a new todo item."""
     user_id = await _get_user_id(runtime)
     id = str(uuid.uuid4())
     
@@ -144,9 +140,7 @@ async def update_todo(
     expected_completion_at: Optional[str] = None,
     scheduled_start_at: Optional[str] = None,
 ) -> Command:
-    """
-    Update an existing todo by its ID.
-    """
+    """Update an existing todo by ID."""
     user_id = await _get_user_id(runtime)
     
     # Standardize time if provided
@@ -188,9 +182,7 @@ async def update_todo(
 
 @tool
 async def delete_todo(runtime: ToolRuntime, id: str) -> Command:
-    """
-    Delete a todo by its ID.
-    """
+    """Delete a todo by ID."""
     user_id = await _get_user_id(runtime)
     await db_delete_todo(id)
 

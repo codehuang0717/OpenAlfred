@@ -48,12 +48,17 @@ async def load_context_node(state: AgentState, config):
 async def agent_node(state: AgentState, config):
     """
     The main reasoning node.
+    Uses keyword-based dynamic tool selection to minimize token overhead.
     """
-    from tools import ALL_TOOLS
+    from tools import TOOL_GROUPS, DEFAULT_TOOLS, ALL_TOOLS
     model_selection = state.model_selection or "gpt-cloud"
     
-    # Bind tools to the model
-    llm = get_model(model_selection).bind_tools(ALL_TOOLS)
+    # ── Dynamic Tool Selection (Strategy 2A) ──
+    # Extract the last user message for keyword matching
+    selected_tools = _select_tools_by_intent(state.messages)
+    
+    # Bind only the selected tools to the model
+    llm = get_model(model_selection).bind_tools(selected_tools)
     
     # Construction of the dynamic prompt:
     # 1. Prepend the transient system instruction (with current time/summary)
@@ -73,6 +78,55 @@ async def agent_node(state: AgentState, config):
     # Run the model
     response = await llm.ainvoke(prompt_messages, config)
     return {"messages": [response]}
+
+
+def _select_tools_by_intent(messages: list) -> list:
+    """Select relevant tools based on keyword matching against the last user message.
+    
+    Falls back to DEFAULT_TOOLS (todos + reminders) if no keywords match.
+    Always deduplicates to avoid binding the same tool twice.
+    """
+    from tools import TOOL_GROUPS, DEFAULT_TOOLS
+    
+    # Find the last user message
+    user_msg = ""
+    for msg in reversed(messages):
+        if hasattr(msg, "type") and msg.type == "human":
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            user_msg = content.lower()
+            break
+        elif isinstance(msg, dict) and msg.get("role") == "user":
+            user_msg = msg.get("content", "").lower()
+            break
+    
+    if not user_msg:
+        return DEFAULT_TOOLS
+    
+    selected = []
+    matched_groups = []
+    
+    for group_name, group_config in TOOL_GROUPS.items():
+        keywords = group_config["keywords"]
+        if any(kw in user_msg for kw in keywords):
+            selected.extend(group_config["tools"])
+            matched_groups.append(group_name)
+    
+    # Fallback: no keyword matched → use default core tools
+    if not selected:
+        selected = list(DEFAULT_TOOLS)
+        matched_groups = ["default(todos+reminders)"]
+    
+    # Deduplicate while preserving order
+    seen = set()
+    unique_tools = []
+    for tool in selected:
+        tool_id = id(tool)
+        if tool_id not in seen:
+            seen.add(tool_id)
+            unique_tools.append(tool)
+    
+    logger.info(f"[ToolRouter] Matched groups: {matched_groups} → {len(unique_tools)} tools bound (vs {len(DEFAULT_TOOLS)} default)")
+    return unique_tools
 
 async def summarize_node(state: AgentState, config):
     """

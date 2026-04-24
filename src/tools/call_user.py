@@ -133,9 +133,7 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
 async def make_outbound_call(
     runtime: ToolRuntime, phone_number: str = "100", initial_speech: str = ""
 ) -> Command:
-    """
-    主动拨打电话给用户。当你需要紧急提醒用户或者用户要求你打电话时使用。
-    """
+    """Make an outbound phone call to the user for urgent reminders or when requested."""
     user_id = await _get_user_id(runtime)
     msg = await dial_user(phone_number, initial_speech, user_id)
 
