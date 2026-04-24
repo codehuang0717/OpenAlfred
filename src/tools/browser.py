@@ -35,7 +35,7 @@ async def web_browser_task(runtime: ToolRuntime, task_description: str) -> Comma
     logger.info(f"Starting browser task: {task_description}")
     
     # 1. Get the LLM using browser-use's specific wrapper to avoid Pydantic issues
-    llm = ChatOpenAI(model=config.CLOUD_MODEL_NAME, api_key=config.OPENAI_API_KEY)
+    llm = ChatOpenAI(model=config.CLOUD_BROWSER_MODEL, api_key=config.OPENAI_API_KEY)
 
     # 2. Find local Chrome path
     chrome_path = get_chrome_path()

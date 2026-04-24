@@ -34,7 +34,8 @@ class Config:
     # Local Model Settings
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "gemma4:e2b")
-    CLOUD_MODEL_NAME = os.getenv("CLOUD_MODEL_NAME", "gpt-5.4-nano")
+    CLOUD_CHAT_MODEL = os.getenv("CLOUD_CHAT_MODEL", "gpt-5.4-nano")
+    CLOUD_BROWSER_MODEL = os.getenv("CLOUD_BROWSER_MODEL", "gpt-5.4-mini")
     BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
     # TTS Settings (Faster-Qwen3-TTS)

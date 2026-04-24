@@ -21,10 +21,11 @@ def get_model(selection: str = "gpt-cloud") -> BaseChatModel:
                 logger.info(f"Initialized local Ollama model: {config.LOCAL_MODEL_NAME}")
             except ImportError:
                 logger.warning("langchain-ollama not installed, falling back to cloud GPT")
-                _model_cache[selection] = ChatOpenAI(model=config.CLOUD_MODEL_NAME)
+                _model_cache[selection] = ChatOpenAI(model=config.CLOUD_CHAT_MODEL)
+                logger.info(f"Initialized fallback cloud model: {config.CLOUD_CHAT_MODEL}")
         else:
             # Default to cloud model
-            _model_cache[selection] = ChatOpenAI(model=config.CLOUD_MODEL_NAME)
-            logger.info(f"Initialized cloud GPT model: {config.CLOUD_MODEL_NAME}")
+            _model_cache[selection] = ChatOpenAI(model=config.CLOUD_CHAT_MODEL)
+            logger.info(f"Initialized cloud GPT model: {config.CLOUD_CHAT_MODEL}")
             
     return _model_cache[selection]
