@@ -17,6 +17,9 @@ async def _get_credentials(user_id: str, account_id: str = None) -> dict:
     if not creds_list:
         raise EmailServiceException("No email accounts configured for this user.")
         
+    if account_id == "undefined" or account_id == "":
+        account_id = None
+        
     creds = creds_list[0] if account_id is None else next((c for c in creds_list if c["account_id"] == account_id), None)
     
     if not creds:
@@ -122,16 +125,16 @@ async def _fetch_recent_for_account(creds: dict, limit: int) -> list:
         print(f"Error fetching from {creds['email_address']}: {e}")
         return []
 
-async def get_recent_emails(user_id: str, limit: int = 10, account_id: str = None) -> list:
-    """Fetches recent emails. If account_id is None, fetches from all configured accounts."""
+async def get_recent_emails(user_id: str, limit: int = 10, account_ids: list[str] = None) -> list:
+    """Fetches recent emails. If account_ids is None, fetches from all configured accounts."""
     creds_list = await get_email_credentials(user_id)
     if not creds_list:
         raise EmailServiceException("No email accounts configured for this user.")
         
-    if account_id:
-        creds_list = [c for c in creds_list if c["account_id"] == account_id]
+    if account_ids:
+        creds_list = [c for c in creds_list if c["account_id"] in account_ids]
         if not creds_list:
-            raise EmailServiceException(f"Account with ID {account_id} not found.")
+            raise EmailServiceException(f"None of the specified accounts were found.")
 
     for c in creds_list:
         c["password"] = decrypt_password(c["encrypted_password"])
@@ -198,7 +201,16 @@ async def read_email(user_id: str, email_id: str, account_id: str = None) -> dic
 
         if not html_body and body_text:
             html_body = f"<pre style='font-family: inherit; white-space: pre-wrap;'>{body_text}</pre>"
-                
+            
+        if not body_text and html_body:
+            import re
+            import html as html_lib
+            # Basic fallback to extract text from HTML for LLM context and UI preview
+            text = re.sub(r'<style.*?>.*?</style>', ' ', html_body, flags=re.IGNORECASE | re.DOTALL)
+            text = re.sub(r'<script.*?>.*?</script>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = html_lib.unescape(text)
+            body_text = ' '.join(text.split())
         date_str = msg.get("Date", "")
         try:
             dt = parsedate_to_datetime(date_str)
@@ -208,6 +220,8 @@ async def read_email(user_id: str, email_id: str, account_id: str = None) -> dic
 
         result = {
             "id": email_id,
+            "account_id": creds["account_id"],
+            "account_email": creds["email_address"],
             "subject": _decode_header_str(msg.get("Subject", "")),
             "from": _decode_header_str(msg.get("From", "")),
             "date": iso_date,

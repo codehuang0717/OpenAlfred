@@ -15,19 +15,37 @@ from tools.todos import _get_user_id
 async def get_recent_emails(
     runtime: ToolRuntime, 
     limit: int = 10, 
-    account_id: Optional[str] = None
+    account_filter: Optional[str] = None
 ) -> Command:
-    """Get recent emails from user's inbox. Returns subject, sender, date, email ID, and available account info."""
+    """Get recent emails from user's inbox. 
+    If the user specifies an email provider or address (e.g., 'qq', 'gmail'), pass it as account_filter to strictly fetch from that account.
+    Returns subject, sender, date, email ID, and available account info."""
     user_id = await _get_user_id(runtime)
     try:
-        emails = await _get_recent_emails(user_id=user_id, limit=limit, account_id=account_id)
-        # Also fetch account info so LLM doesn't need a separate tool call
-        try:
-            from database import get_email_credentials
-            creds = await get_email_credentials(user_id)
-            accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
-        except Exception:
-            accounts = []
+        from database import get_email_credentials
+        creds = await get_email_credentials(user_id)
+        accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
+        
+        target_account_ids = None
+        if account_filter:
+            filter_lower = account_filter.lower()
+            target_account_ids = [
+                c["account_id"] for c in accounts 
+                if filter_lower in c["email"].lower() or filter_lower in c["provider"].lower()
+            ]
+            if not target_account_ids:
+                return Command(
+                    update={
+                        "messages": [
+                            ToolMessage(
+                                content=f"No email accounts found matching '{account_filter}'. Available accounts: {json.dumps(accounts)}",
+                                tool_call_id=runtime.tool_call_id,
+                            )
+                        ]
+                    }
+                )
+                
+        emails = await _get_recent_emails(user_id=user_id, limit=limit, account_ids=target_account_ids)
         # Format for rich rendering in the frontend
         return Command(
             update={

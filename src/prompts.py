@@ -21,7 +21,7 @@ AGENT_SYSTEM_PROMPT = """
 
 ### 邮件相关
 - 查看邮件列表时，强制输出 ```email_list``` JSON 代码块。
-- 读取邮件时，强制输出 ```email_content``` JSON 代码块。
+- 读取邮件时，强制输出 ```email_content``` JSON 代码块（仅用于渲染原文摘要，请保留原始信息的截断版，且必须包含原始的 id 和 account_id 字段）。**你对邮件的任何口语化总结、解读或回复，必须写在 JSON 代码块之外的普通文本中！绝不能放在 JSON 内部！**
 - 起草邮件时，强制输出 ```email_draft``` JSON 代码块，保留原有 account_id。
 
 ## 时间处理原则
