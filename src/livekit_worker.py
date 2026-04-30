@@ -19,6 +19,7 @@ import collections
 import os
 import uuid
 import time
+import numpy as np
 from datetime import datetime
 from config import config
 
@@ -35,6 +36,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("livekit-worker")
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger.info("Pre-loading Silero VAD model...")
+GLOBAL_VAD = silero.VAD.load(min_silence_duration=1.0)
+logger.info("Silero VAD model loaded successfully.")
 
 db_initialized = False
 # Session-level metadata cache to pass info from entrypoint to call_agent
@@ -347,7 +352,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 start_time = time.time()
             
             if playback_started:
-                import numpy as np
                 audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
                 jitter_buffer_bytes = b"" 
                 
@@ -367,7 +371,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
             if not playback_started:
                 playback_started = True
                 start_time = time.time()
-            import numpy as np
             audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
             for i in range(0, len(audio_np), 480):
                 if interrupt_event.is_set():
@@ -427,7 +430,6 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
         with wave.open(wav_path, "rb") as wf:
             framerate = wf.getframerate()
             audio_data = wf.readframes(wf.getnframes())
-        import numpy as np
 
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
         if framerate != 24000:
@@ -693,7 +695,6 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
             framerate = wf.getframerate()
             audio_data = wf.readframes(wf.getnframes())
             
-        import numpy as np
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
         if framerate != 24000:
             audio_np = np.interp(
@@ -734,8 +735,7 @@ async def process_audio_safe(
     track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str
 ):
     audio_stream = rtc.AudioStream(track)
-    silero_vad = silero.VAD.load(min_silence_duration=1.0)
-    vad_stream = silero_vad.stream()
+    vad_stream = GLOBAL_VAD.stream()
     all_frames = []
     pre_buffer = collections.deque(maxlen=300)
     is_speaking = False

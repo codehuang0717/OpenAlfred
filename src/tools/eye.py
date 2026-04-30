@@ -9,90 +9,131 @@ SCREENPIPE_URL = "http://localhost:3030"
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.syntax import Syntax
 
 console = Console()
 
-async def get_recent_ocr_text(minutes: int = 10) -> str:
+async def get_enhanced_context(minutes: int = 10) -> str:
     """
-    Fetch and summarize OCR text captured by Screenpipe in the last X minutes.
+    Fetch OCR, Audio, and UI context from Screenpipe for a comprehensive user activity view.
     """
     try:
         now_utc = datetime.now(timezone.utc)
         start_time_dt = now_utc - timedelta(minutes=minutes)
         start_time_str = start_time_dt.isoformat()
         
-        # Diagnostic Log
-        console.print(Panel(
-            f"[bold cyan]Screenpipe Query[/bold cyan]\n"
-            f"Local Time: {datetime.now().strftime('%H:%M:%S')}\n"
-            f"UTC Time  : {now_utc.strftime('%H:%M:%S')} (Z)\n"
-            f"Start Time: {start_time_str}\n"
-            f"Window    : {minutes} minutes",
-            title="[eye-tool] Diagnostic",
-            border_style="cyan"
-        ))
-
         async with httpx.AsyncClient() as client:
+            # 1. Fetch OCR and Audio in one search call
             params = {
-                "limit": 50,
-                "content_type": "ocr",
+                "limit": 60,
+                "content_type": "all", # Fetch OCR, Audio, and Input
                 "start_time": start_time_str
             }
             resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
             
             if resp.status_code != 200:
-                console.print(f"[bold red]Screenpipe Error:[/bold red] {resp.status_code}")
-                return ""
-            
+                logger.error(f"Screenpipe Search Error: {resp.status_code}")
+                return "Error fetching screen context."
+
             data = resp.json()
             items = data.get("data", [])
             
-            # Diagnostic Response Summary
-            count = len(items)
-            res_color = "green" if count > 0 else "yellow"
-            console.print(f"[{res_color}][eye-tool] Screenpipe returned {count} OCR items.[/{res_color}]")
-            
-            if not items:
-                return "No screen activity detected in the last few minutes."
-            
-            seen_text = set()
-            unique_content = []
+            # 2. Process items into structured context
+            ocr_parts = []
+            audio_parts = []
+            input_events = 0
+            apps_active = set()
+            urls_active = set()
             
             for item in items:
-                content = item.get("content", {}).get("text", "").strip()
-                if content and content not in seen_text:
-                    seen_text.add(content)
-                    unique_content.append(content)
+                content_type = item.get("type", "").upper()
+                content = item.get("content", {})
+                
+                if content_type == "OCR":
+                    text = content.get("text", "").strip()
+                    app = content.get("app_name", "Unknown")
+                    window = content.get("window_name", "Unknown")
+                    url = content.get("browser_url", "")
+                    
+                    if text:
+                        ocr_parts.append(f"[{app} | {window}] {text[:200]}")
+                        apps_active.add(app)
+                        if url: urls_active.add(url)
+                
+                elif content_type == "AUDIO":
+                    text = content.get("text", "").strip()
+                    if text:
+                        audio_parts.append(text)
+                
+                elif content_type == "INPUT":
+                    input_events += 1
             
-            summary = "\n".join(unique_content[:20]) 
+            # 3. Fetch Activity Summary (if available)
+            activity_summary = ""
+            try:
+                summary_resp = await client.get(f"{SCREENPIPE_URL}/activity/get-activity-summary", timeout=5.0)
+                if summary_resp.status_code == 200:
+                    activity_data = summary_resp.json()
+                    # activity_data format depends on version, usually it's a list of activities
+                    # We'll just take a few if it's a list
+                    if isinstance(activity_data, list):
+                        summary_items = [f"{a.get('app_name')}: {a.get('duration')}s" for a in activity_data[:5]]
+                        activity_summary = "Recent Apps: " + ", ".join(summary_items)
+            except:
+                pass # Optional feature
+
+            # 4. Construct Final Context String
+            context_blocks = []
             
-            # Preview of what's going to AI
-            console.print(Panel(
-                summary[:500] + ("..." if len(summary) > 500 else ""),
-                title="OCR Context Preview (Sent to AI)",
-                border_style="dim"
-            ))
+            if apps_active:
+                context_blocks.append(f"Active Apps: {', '.join(apps_active)}")
             
-            return summary if summary else "Screen was blank or no text detected."
+            if urls_active:
+                context_blocks.append(f"Active URLs: {', '.join(urls_active)}")
+            
+            context_blocks.append(f"Physical Activity: {'Active' if input_events > 0 else 'Idle'} ({input_events} input events detected)")
+
+            if activity_summary:
+                context_blocks.append(f"Activity Summary: {activity_summary}")
+
+            if ocr_parts:
+                # Keep unique and relevant OCR snippets
+                unique_ocr = list(dict.fromkeys(ocr_parts))[:15]
+                context_blocks.append("--- Screen Content (OCR) ---\n" + "\n".join(unique_ocr))
+            
+            if audio_parts:
+                unique_audio = list(dict.fromkeys(audio_parts))[:10]
+                context_blocks.append("--- Audio Transcripts (Meetings/Speech) ---\n" + "\n".join(unique_audio))
+
+            final_context = "\n\n".join(context_blocks)
+            
+            # Diagnostic Log
+            console.print(f"[cyan][eye-tool] Fetched enhanced context: {len(ocr_parts)} OCR items, {len(audio_parts)} Audio items.[/cyan]")
+            
+            return final_context if final_context else "No activity detected."
 
     except Exception as e:
-        console.print(f"[bold red]Error connecting to Screenpipe:[/bold red] {e}")
+        logger.error(f"Error connecting to Screenpipe: {e}")
         return f"Error connecting to Screenpipe: {str(e)}"
 
-# LangChain tool definitions (for the chat agent)
+async def get_recent_ocr_text(minutes: int = 10) -> str:
+    """Legacy wrapper for backward compatibility or simple use cases."""
+    return await get_enhanced_context(minutes)
+
+# LangChain tool definitions
 from langchain.tools import tool
 
 @tool
 async def view_screen(mode: Literal["current", "history"] = "current", query: str = "") -> str:
-    """View user's screen content. mode='current' for live screen (last 2min OCR), mode='history' to search past screen text by query."""
+    """View user's screen content and audio activity. 
+    mode='current' for live activity (last 2-5min), 
+    mode='history' to search past screen/audio text by query."""
     if mode == "history" and query:
         try:
             async with httpx.AsyncClient() as client:
                 params = {
                     "q": query,
-                    "limit": 10,
-                    "content_type": "ocr"
+                    "limit": 15,
+                    "content_type": "all"
                 }
                 resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
                 if resp.status_code == 200:
@@ -101,14 +142,17 @@ async def view_screen(mode: Literal["current", "history"] = "current", query: st
                     
                     results = []
                     for item in items:
-                        ts = item.get("content", {}).get("timestamp", "unknown")
-                        txt = item.get("content", {}).get("text", "")
-                        results.append(f"[{ts}] {txt}")
+                        itype = item.get("type", "OCR")
+                        content = item.get("content", {})
+                        ts = content.get("timestamp", "unknown")
+                        txt = content.get("text", "")
+                        app = content.get("app_name", "N/A")
+                        results.append(f"[{ts}] [{itype}] [{app}] {txt}")
                     return "\n---\n".join(results)
                 return f"Error: {resp.text}"
         except Exception as e:
-            return f"Error querying screen history: {e}"
+            return f"Error querying history: {e}"
     else:
-        return await get_recent_ocr_text(minutes=2)
+        return await get_enhanced_context(minutes=2)
 
 screen_tools = [view_screen]

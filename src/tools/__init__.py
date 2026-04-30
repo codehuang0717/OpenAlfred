@@ -6,6 +6,7 @@ from tools.eye import screen_tools
 from tools.email_tools import email_tools
 from tools.browser import browser_tools
 from tools.search import search_tools
+from tools.screenshot import screenshot_tools
 
 ALL_TOOLS = (
     todo_tools + 
@@ -15,6 +16,7 @@ ALL_TOOLS = (
     email_tools +
     browser_tools +
     screen_tools +
-    search_tools
+    search_tools +
+    screenshot_tools
 )
 

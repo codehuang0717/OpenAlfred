@@ -44,7 +44,7 @@ class Config:
     TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
     TTS_VOICE = os.getenv("TTS_VOICE", "yingxue")
     TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
-    TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "120"))
+    TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "500"))
 
     # JWT Authentication Settings
     JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")

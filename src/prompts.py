@@ -14,7 +14,7 @@ AGENT_SYSTEM_PROMPT = """
 
 ### 意图区分原则
 - 当用户说"看一下"、"查一下"、"看一眼"但语境是"代办"、"备忘录"、"日程"时，使用【任务管理】工具，**绝不能**调用屏幕视觉。
-- 只有在用户明确说"看看我的屏幕"、"看看我在干嘛"、"帮我看一下这段代码/网页"时才调用 view_screen。
+- 只有在用户明确说"看看我的屏幕"、"看看我在干嘛"、"帮我看一下这段代码/网页"时才调用 take_screenshot。
 - 当需要获取实时信息、新闻、百科知识或查找特定事实时，使用 web_search。
 - 只有当需要执行复杂的网页交互（如登录、点击、自动填表）或在特定网站（如Moodle）执行任务时，才调用 web_browser_task。
 - 当用户提到"叫醒"、"起床"、"重要"、"紧急"等关键词设提醒时，务必设 delivery_method="call"，并提供亲切的 call_greeting。
@@ -63,7 +63,7 @@ SUPERVISOR_PROMPT = """\
 ## 输入数据
 - 任务列表: {tasks}
 - 核心参考任务: {focus_task}
-- 最近10分钟 OCR Context: {ocr_context}
+- 最近10分钟 Activity Context (Screen + Audio + Apps): {ocr_context}
 - 持续分心时长: {distraction_duration} 分钟
 
 ## 输出格式 (JSON)

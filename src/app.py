@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 import httpx
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
@@ -822,4 +822,57 @@ async def delete_email_config_api(account_id: str, user: dict = Depends(get_curr
     """Delete an email configuration."""
     await delete_email_credentials(account_id=account_id, user_id=user["id"])
     return {"status": "deleted"}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTIMODAL ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/transcribe")
+async def transcribe_audio_api(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Transcribe audio using local SenseVoice API."""
+    try:
+        content = await file.read()
+        async with httpx.AsyncClient() as client:
+            files = {"file": (file.filename, content, file.content_type)}
+            resp = await client.post(
+                "http://127.0.0.1:8000/extract_text", files=files, timeout=30.0
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                return {"text": result.get("results", "")}
+            else:
+                raise HTTPException(status_code=resp.status_code, detail="Transcription failed")
+    except Exception as e:
+        logger.error(f"Error transcribing audio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/parse-file")
+async def parse_file_api(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Extract text from uploaded files (PDF, TXT, etc.)."""
+    try:
+        content = await file.read()
+        text = ""
+        filename = file.filename.lower()
+        
+        if filename.endswith(".pdf"):
+            import io
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(content))
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+        elif filename.endswith(".docx"):
+            import io
+            import docx
+            doc = docx.Document(io.BytesIO(content))
+            text = "\n".join([p.text for p in doc.paragraphs])
+        else:
+            # Assume text based
+            text = content.decode('utf-8', errors='ignore')
+            
+        return {"text": text.strip()}
+    except Exception as e:
+        logger.error(f"Error parsing file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse file: {str(e)}")
 

@@ -3,6 +3,8 @@ import logging
 import sys
 import os
 import json
+import psutil
+import subprocess
 from datetime import datetime, timezone
 from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
@@ -42,6 +44,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("supervisor")
 
+def get_screenpipe_process():
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and proc.info['name'].lower() == 'screenpipe.exe':
+            return proc
+    return None
+
+def start_screenpipe():
+    if not get_screenpipe_process():
+        logger.info("Starting screenpipe dynamically...")
+        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "body", "windows_system", "eye", "setup_eye.ps1")
+        subprocess.Popen(
+            ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_path],
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+def stop_screenpipe():
+    proc = get_screenpipe_process()
+    if proc:
+        logger.info("Stopping screenpipe dynamically to save resources...")
+        try:
+            proc.kill()
+        except:
+            pass
+
+
 class SupervisorDecision(BaseModel):
     """Schema for supervisor decision logic."""
     status: Literal["NORMAL", "GENTLE_REMINDER", "STRICT_WARNING", "SEVERE_DISCIPLINE"] = Field(
@@ -57,8 +84,11 @@ class ProactiveSupervisor:
     async def run_cycle(self):
         # 0. Check if Supervision is enabled in settings
         is_enabled_str = await get_setting("supervisor_enabled", "true")
-        if is_enabled_str.lower() != "true":
+        supervision_enabled = (is_enabled_str.lower() == "true")
+
+        if not supervision_enabled:
             logger.info("Supervision is currently DISABLED. Skipping cycle.")
+            stop_screenpipe()
             return
 
         logger.info("--- Starting Supervision Cycle ---")
@@ -123,10 +153,14 @@ class ProactiveSupervisor:
 
         if not active_todos:
             logger.info(f"User {username} has no active tasks at this time. Monitoring status: Idle.")
+            stop_screenpipe()
             if state.get('is_distracted'):
                 # Also reset distraction if user was distracted but now has no tasks to do
                 await reset_supervisor_state(user_id)
             return
+
+        # Start screenpipe if not running
+        start_screenpipe()
 
         ocr_context = await get_recent_ocr_text(minutes=config.SUPERVISOR_OCR_WINDOW_MINS)
         
