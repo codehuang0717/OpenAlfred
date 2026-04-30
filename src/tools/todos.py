@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, Literal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from langchain.tools import ToolRuntime, tool
 from langchain.messages import ToolMessage
@@ -66,10 +66,72 @@ async def sync_todos_to_state(runtime: ToolRuntime):
 
 
 @tool
-async def get_todos(runtime: ToolRuntime) -> list[TodoDict]:
-    """Get all current todos."""
+async def get_todos(
+    runtime: ToolRuntime,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> list[TodoDict]:
+    """Get current todos, optionally filtered by date range.
+    
+    Args:
+        date_from: Start of date range (local time, e.g. '2026-05-01T00:00:00'). Only todos with scheduled_start_at or expected_completion_at on or after this time are returned.
+        date_to: End of date range (local time, e.g. '2026-05-01T23:59:59'). Only todos with scheduled_start_at or expected_completion_at on or before this time are returned.
+    
+    When the user asks for a specific day's todos (e.g. "tomorrow", "today"), you MUST pass both date_from and date_to to get accurate results.
+    Example: For "tomorrow" (May 1), pass date_from='2026-05-01T00:00:00', date_to='2026-05-01T23:59:59'.
+    """
     user_id = await _get_user_id(runtime)
     todos = await get_all_todos(user_id=user_id)
+    
+    # Apply date range filter if provided
+    if date_from or date_to:
+        from utils.time_utils import localize_to_utc, parse_to_aware_utc
+        
+        utc_from = None
+        utc_to = None
+        if date_from:
+            try:
+                utc_from = parse_to_aware_utc(localize_to_utc(date_from))
+            except Exception:
+                pass
+        if date_to:
+            try:
+                utc_to = parse_to_aware_utc(localize_to_utc(date_to))
+            except Exception:
+                pass
+        
+        filtered = []
+        for t in todos:
+            # Check if any time field falls within the range
+            time_fields = [t.get('scheduled_start_at'), t.get('expected_completion_at')]
+            matched = False
+            for tf in time_fields:
+                if not tf:
+                    continue
+                try:
+                    t_dt = parse_to_aware_utc(tf)
+                    if utc_from and t_dt < utc_from:
+                        continue
+                    if utc_to and t_dt > utc_to:
+                        continue
+                    matched = True
+                    break
+                except Exception:
+                    continue
+            # When date filtering is active, skip todos without any time field
+            if matched:
+                filtered.append(t)
+        
+        todos = filtered
+    
+    # Convert UTC timestamps to local time for LLM readability
+    from utils.time_utils import utc_to_local
+    for t in todos:
+        if t.get('scheduled_start_at'):
+            t['scheduled_start_at'] = utc_to_local(t['scheduled_start_at'])
+        if t.get('expected_completion_at'):
+            t['expected_completion_at'] = utc_to_local(t['expected_completion_at'])
+    
     return todos
 
 

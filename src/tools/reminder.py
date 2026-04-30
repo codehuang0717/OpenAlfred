@@ -154,18 +154,95 @@ async def add_reminder(
         return Command(update={"messages": [ToolMessage(content=f"ERROR: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
 @tool
-async def list_reminders(runtime: ToolRuntime) -> str:
-    """List all scheduled reminders."""
+async def list_reminders(
+    runtime: ToolRuntime,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> str:
+    """List scheduled reminders, optionally filtered by date range.
+    
+    Args:
+        date_from: Start of date range (local time, e.g. '2026-05-01T00:00:00'). Only reminders scheduled on or after this time are returned.
+        date_to: End of date range (local time, e.g. '2026-05-01T23:59:59'). Only reminders scheduled on or before this time are returned.
+    
+    When the user asks for a specific day's reminders (e.g. "tomorrow"), pass both date_from and date_to.
+    """
     try:
+        from utils.time_utils import utc_to_local, parse_to_aware_utc
+        
         user_id = _get_user_id(runtime)
         reminders = await get_all_reminders(user_id=user_id)
+        
+        # Apply date range filter
+        if date_from or date_to:
+            utc_from = None
+            utc_to = None
+            if date_from:
+                try:
+                    utc_from = parse_to_aware_utc(localize_to_utc(date_from))
+                except Exception:
+                    pass
+            if date_to:
+                try:
+                    utc_to = parse_to_aware_utc(localize_to_utc(date_to))
+                except Exception:
+                    pass
+            
+            filtered = []
+            for r in reminders:
+                scheduled = r.get('scheduled_at', '')
+                if not scheduled:
+                    continue
+                try:
+                    r_dt = parse_to_aware_utc(scheduled)
+                    if utc_from and r_dt < utc_from:
+                        continue
+                    if utc_to and r_dt > utc_to:
+                        continue
+                    filtered.append(r)
+                except Exception:
+                    continue  # Skip unparseable entries
+            reminders = filtered
+        
         if not reminders:
             return "当前没有任何提醒任务。"
-        res = "📋 提醒任务列表:\n"
+        
+        # Separate into upcoming (unsent) and past (sent)
+        upcoming = []
+        past = []
         for r in reminders:
-            status = "🔔" if not r['sent'] else "✅"
-            method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
-            res += f"{status} [{r['id'][:8]}] {r['scheduled_at']}: {r['body']} ({method})\n"
+            if r['sent']:
+                past.append(r)
+            else:
+                upcoming.append(r)
+        
+        # Sort upcoming by scheduled_at ascending (nearest first)
+        def parse_scheduled(r):
+            try:
+                return parse_to_aware_utc(r.get('scheduled_at', ''))
+            except Exception:
+                return datetime.max.replace(tzinfo=timezone.utc)
+        
+        upcoming.sort(key=parse_scheduled)
+        
+        res = ""
+        if upcoming:
+            res += f"📋 待触发提醒 ({len(upcoming)}条):\n"
+            for i, r in enumerate(upcoming):
+                method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
+                local_time = utc_to_local(r.get('scheduled_at', ''))
+                marker = "👉 [下一个] " if i == 0 else ""
+                res += f"{marker}🔔 [{r['id'][:8]}] {local_time}: {r['body']} ({method})\n"
+        else:
+            res += "当前没有待触发的提醒。\n"
+        
+        if past:
+            res += f"\n✅ 已完成提醒 ({len(past)}条):\n"
+            for r in past:
+                method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
+                local_time = utc_to_local(r.get('scheduled_at', ''))
+                res += f"✅ [{r['id'][:8]}] {local_time}: {r['body']} ({method})\n"
+        
         return res
     except Exception as e:
         return f"获取列表失败: {str(e)}"
