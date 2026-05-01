@@ -16,13 +16,9 @@ from tts import save_tts_to_file
 from utils.time_utils import localize_to_utc
 from database import (
     add_reminder as db_add_reminder,
-    get_pending_reminders,
-    mark_reminder_sent,
     get_all_reminders,
     delete_reminder as db_delete_reminder,
     update_reminder as db_update_reminder,
-    get_pending_todo_notifications,
-    mark_todo_notification_sent,
     AUDIO_CACHE_DIR,
 )
 
@@ -55,26 +51,7 @@ async def pre_render_tts(text: str, filename: str) -> str:
         traceback.print_exc()
         return ""
 
-from notification_service import notification_service
 
-async def _send_bark_notification(
-    body: str,
-    title: Optional[str] = None,
-    subtitle: Optional[str] = None,
-    level: str = "active",
-    sound: Optional[str] = None,
-) -> str:
-    """Internal function to send Bark notification using the new NotificationService."""
-    success = await notification_service.send_bark_notification(
-        body=body,
-        title=title,
-        subtitle=subtitle,
-        level=level, # type: ignore
-        sound=sound,
-        group="OpenAlfred-Reminders",
-        icon="https://cdn-icons-png.flaticon.com/512/3602/3602123.png" # Bell icon
-    )
-    return "success" if success else "error"
 
 
 def _get_user_id(runtime: ToolRuntime) -> str:
@@ -320,58 +297,7 @@ async def cancel_reminder(runtime: ToolRuntime, id: str) -> Command:
     except Exception as e:
         return Command(update={"messages": [ToolMessage(content=f"取消失败: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
-async def check_and_send_pending_reminders():
-    """后台扫描并发送到期的提醒。支持推送和电话。"""
-    from tools.call_user import generate_sip_token, OUTBOUND_TRUNK_ID
-    
-    try:
-        pending = await get_pending_reminders()
-        for r in pending:
-            print(f"[Scheduler] Sending reminder: {r['body']} via {r['delivery_method']}")
-            
-            if r.get("delivery_method") == "call":
-                jwt_token = generate_sip_token()
-                api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-                if api_url.endswith("/"): api_url = api_url[:-1]
-                url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"
-                
-                room_name = f"outbound-reminder-{r['id']}"
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        url,
-                        headers={"Authorization": f"Bearer {jwt_token}"},
-                        json={
-                            "sipTrunkId": OUTBOUND_TRUNK_ID,
-                            "sipCallTo": "100", # 默认拨打 100
-                            "roomName": room_name,
-                        },
-                        timeout=10.0,
-                    )
-            else:
-                # Bark 推送
-                await _send_bark_notification(
-                    body=r['body'],
-                    title=r.get('title'),
-                    subtitle=r.get('subtitle'),
-                    level=r.get('level', 'active'),
-                    sound=r.get('sound')
-                )
-            
-            await mark_reminder_sent(r["id"])
-    except Exception as e:
-        print(f"[Scheduler] ERROR: {e}")
 
-async def check_and_send_todo_notifications():
-    """Scan and send notifications for scheduled Todos."""
-    try:
-        pending_todos = await get_pending_todo_notifications()
-        for todo in pending_todos:
-            print(f"[Scheduler] Sending notification for Todo: {todo['title']}")
-            success = await notification_service.send_todo_reminder(todo)
-            if success:
-                await mark_todo_notification_sent(todo['id'])
-    except Exception as e:
-        print(f"[Scheduler] Todo Notification ERROR: {e}")
 
 reminder_tools = [
     add_reminder,
