@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import os
+import time
 import json
 import psutil
 import subprocess
@@ -24,8 +25,10 @@ from database import (
     get_supervisor_state, 
     update_supervisor_state, 
     reset_supervisor_state,
-    get_setting
+    get_setting,
+    AUDIO_CACHE_DIR
 )
+from tts import save_tts_to_file
 from tools.eye import get_recent_ocr_text
 from utils.time_utils import utc_to_local, parse_to_aware_utc
 from tools.call_user import dial_user
@@ -44,13 +47,21 @@ from utils.logger import setup_logging, get_logger
 setup_logging(log_file="supervisor.log")
 logger = get_logger("supervisor")
 
-def get_screenpipe_process():
+def get_screenpipe_processes():
+    procs = []
     for proc in psutil.process_iter(['name']):
-        if proc.info['name'] and proc.info['name'].lower() == 'screenpipe.exe':
-            return proc
-    return None
+        try:
+            if proc.info['name'] and proc.info['name'].lower() == 'screenpipe.exe':
+                procs.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return procs
 
-def start_screenpipe():
+def get_screenpipe_process():
+    procs = get_screenpipe_processes()
+    return procs[0] if procs else None
+
+def start_screenpipe() -> bool:
     if not get_screenpipe_process():
         logger.info("Starting screenpipe dynamically...")
         script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "body", "windows_system", "eye", "setup_eye.ps1")
@@ -58,22 +69,31 @@ def start_screenpipe():
             ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_path],
             creationflags=subprocess.CREATE_NO_WINDOW
         )
+        return True # Indicates it was just started
+    return False
 
 def stop_screenpipe():
-    proc = get_screenpipe_process()
-    if proc:
-        logger.info("Stopping screenpipe and its children dynamically to save resources...")
-        try:
-            for child in proc.children(recursive=True):
-                try:
-                    child.kill()
-                except psutil.NoSuchProcess:
-                    pass
-            proc.kill()
-        except psutil.NoSuchProcess:
-            pass
-        except Exception as e:
-            logger.error(f"Error stopping screenpipe: {e}")
+    procs = get_screenpipe_processes()
+    if procs:
+        logger.info(f"Stopping {len(procs)} screenpipe processes and their children dynamically to save resources...")
+        for proc in procs:
+            try:
+                parent = proc.parent()
+                for child in proc.children(recursive=True):
+                    try:
+                        child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                proc.kill()
+                if parent and parent.name().lower() == 'powershell.exe':
+                    try:
+                        parent.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+            except psutil.NoSuchProcess:
+                pass
+            except Exception as e:
+                logger.error(f"Error stopping screenpipe: {e}")
 
 
 class SupervisorDecision(BaseModel):
@@ -102,11 +122,15 @@ class ProactiveSupervisor:
             return
             
         # If recording is enabled, ensure screenpipe is running
-        start_screenpipe()
+        just_started = start_screenpipe()
         
         if not smart_supervision_enabled:
             logger.info("Smart Supervision is currently DISABLED. Screenpipe is running, but skipping LLM analysis.")
             return
+
+        if just_started:
+            logger.info("Screenpipe just started. Waiting 5 seconds for it to warm up before capturing context...")
+            await asyncio.sleep(5)
 
         logger.info("--- Starting Smart Supervision Cycle ---")
         
@@ -119,7 +143,7 @@ class ProactiveSupervisor:
         user_id = active_user['id']
         username = active_user['username']
         
-        logger.info(f"Targeting active user: {username} ({user_id})")
+        logger.info(f"Targeting active user: {username} ({user_id}). Preparing to fetch context...")
         
         # 2. Get state from DB
         state = await get_supervisor_state(user_id)
@@ -206,9 +230,11 @@ class ProactiveSupervisor:
             distraction_duration=distraction_duration
         )
         
+        logger.info("Context assembled. Requesting LLM analysis...")
         try:
             decision: SupervisorDecision = await self.model.ainvoke([HumanMessage(content=prompt)])
             
+            logger.info(f"LLM analysis complete. Status: {decision.status}")
             # Decision Dashboard
             status_color = "green" if decision.status == "NORMAL" else "bold red"
             console.print(Panel(
@@ -228,13 +254,23 @@ class ProactiveSupervisor:
                 
                 # Action logic: Trigger call for non-normal status
                 if decision.status in ["GENTLE_REMINDER", "STRICT_WARNING", "SEVERE_DISCIPLINE"]:
+                    logger.info(f"Triggering alert for status: {decision.status}")
                     console.print(f"[bold red]!! Action Required !![/bold red] Triggering alert for status: [white on red]{decision.status}[/white on red]")
+                    
+                    # Pre-generate audio to reduce latency
+                    supervisor_id = f"sup_{int(time.time())}"
+                    wav_path = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{supervisor_id}.wav")
+                    logger.info(f"Pre-generating supervisor audio: {wav_path}")
+                    await save_tts_to_file(decision.call_greeting, wav_path)
+                    
                     call_status = await dial_user(
                         phone_number=config.SUPERVISOR_PHONE_NUMBER, 
                         initial_speech=decision.call_greeting,
-                        user_id=user_id
+                        user_id=user_id,
+                        supervisor_id=supervisor_id
                     )
                     last_alert_time = now.isoformat()
+                    logger.info(f"Call Sent: {call_status}")
                     console.print(f"[bold green]Call Sent:[/bold green] {call_status}")
 
                 # ATOMIC UPDATE: Save all state in one go

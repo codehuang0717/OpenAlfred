@@ -406,24 +406,80 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
 
 
 async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_event: asyncio.Event = None, user_id: str = "default", call_type: str = "inbound"):
-    """Play the greeting. Context injection is now handled dynamically by the Graph/Middleware."""
-    if initial_speech:
-        logger.info(f"Playing initial speech: {initial_speech}")
-        dummy_interrupt = asyncio.Event()
-        await play_tts(room, initial_speech, should_exit_event, dummy_interrupt)
-        return
-
-
-    # Updated greeting path to assets/
-    wav_path = str(config.ASSETS_DIR / "greeting.wav")
+    """Play the greeting. Prioritize pre-rendered wav if available, otherwise TTS."""
+    
+    # 1. Check for specific pre-rendered wav file first
+    wav_path = None
     if "outbound-reminder-" in room.name:
         start_idx = room.name.find("outbound-reminder-") + len("outbound-reminder-")
         reminder_id = room.name[start_idx : start_idx + 36]
         specific_wav = os.path.join(AUDIO_CACHE_DIR, f"reminder_{reminder_id}.wav")
         if os.path.exists(specific_wav):
             wav_path = specific_wav
-            logger.info(f"Using specific reminder audio: {wav_path}")
+            logger.info(f"Prioritizing specific reminder audio: {wav_path}")
+    elif "outbound-supervisor-" in room.name:
+        # outbound-supervisor-sup_1234567890-userid
+        start_idx = room.name.find("outbound-supervisor-") + len("outbound-supervisor-")
+        # Supervisor ID looks like sup_1234567890 (4 + 10 = 14 chars)
+        # But let's be more flexible and search for the next '-'
+        end_idx = room.name.find("-", start_idx)
+        if end_idx != -1:
+            sup_id = room.name[start_idx : end_idx]
+            specific_wav = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{sup_id}.wav")
+            if os.path.exists(specific_wav):
+                wav_path = specific_wav
+                logger.info(f"Prioritizing pre-generated supervisor audio: {wav_path}")
+    
+    # 2. If wav exists, play it and return
+    if wav_path:
+        if initial_speech:
+            logger.info(f"Playing pre-generated audio for: {initial_speech}")
+            
+        source = rtc.AudioSource(24000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
+        publication = await room.local_participant.publish_track(track)
+        try:
+            with wave.open(wav_path, "rb") as wf:
+                framerate = wf.getframerate()
+                audio_data = wf.readframes(wf.getnframes())
 
+            audio_np = np.frombuffer(audio_data, dtype=np.int16)
+            if framerate != 24000:
+                audio_np = np.interp(
+                    np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
+                    np.arange(len(audio_np)),
+                    audio_np,
+                ).astype(np.int16)
+
+            silence = np.zeros(24000 + 12000, dtype=np.int16)
+            chunk_size = 480
+            for i in range(0, len(silence), chunk_size):
+                chunk = silence[i : i + chunk_size]
+                if len(chunk) > 0:
+                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
+                    await source.capture_frame(frame)
+
+            for i in range(0, len(audio_np), chunk_size):
+                chunk = audio_np[i : i + chunk_size]
+                if len(chunk) > 0:
+                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
+                    await source.capture_frame(frame)
+            await asyncio.sleep(len(audio_np) / 24000 + 0.5)
+        except Exception as e:
+            logger.error(f"Error in play_greeting (file): {e}")
+        finally:
+            await room.local_participant.unpublish_track(publication.sid)
+        return
+
+    # 3. Fallback: play_tts
+    if initial_speech:
+        logger.info(f"Playing initial speech via TTS: {initial_speech}")
+        dummy_interrupt = asyncio.Event()
+        await play_tts(room, initial_speech, should_exit_event, dummy_interrupt)
+        return
+
+    # 4. Final fallback: default greeting.wav
+    wav_path = str(config.ASSETS_DIR / "greeting.wav")
     if not os.path.exists(wav_path):
         return
 
@@ -503,11 +559,29 @@ async def entrypoint(ctx: JobContext):
 
 
     if call_type == "outbound":
-        # Format: outbound-{user_id}-{timestamp}
-        parts = room.name.split("-")
-        if len(parts) >= 3:
-            # Reconstruct the UUID (which has hyphens)
-            user_id = "-".join(parts[1:-1])
+        # Format 1: outbound-{user_id}-{timestamp}
+        # Format 2: outbound-reminder-{reminder_id}-{user_id}
+        # Format 3: outbound-supervisor-{supervisor_id}-{user_id}
+        if room.name.startswith("outbound-reminder-"):
+            # room.name looks like outbound-reminder-UUID-USERID
+            # "outbound-reminder-" is 18 chars. UUID is 36 chars.
+            # Then we have a '-' which is 1 char. The rest is user_id.
+            user_id = room.name[18 + 36 + 1:]
+            if not user_id:
+                user_id = "default"
+        elif room.name.startswith("outbound-supervisor-"):
+            # outbound-supervisor-sup_1234567890-userid
+            # parts[0]=outbound, parts[1]=supervisor, parts[2]=sup_id, parts[3:]=user_id
+            parts = room.name.split("-")
+            if len(parts) >= 4:
+                user_id = "-".join(parts[3:])
+            else:
+                user_id = "default"
+        else:
+            parts = room.name.split("-")
+            if len(parts) >= 3:
+                # Format 1: Reconstruct the user_id (which might have hyphens) from the middle parts
+                user_id = "-".join(parts[1:-1])
     else:
         # TODO: 暂时先绑定到FlyingPig账号的名下，下一轮修改为动态映射
         try:

@@ -56,6 +56,8 @@ async def add_todo(
         await db.commit()
 
     await event_bus.publish(EventType.TODO_CREATED, {"id": id, "user_id": user_id})
+    if scheduled_start_at:
+        await event_bus.schedule(EventType.TODO_NOTIFICATION_DUE, {"id": id}, scheduled_start_at)
 
 
 
@@ -112,6 +114,14 @@ async def update_todo(
 
     await event_bus.publish(EventType.TODO_UPDATED, {"id": id})
 
+    if scheduled_start_at is not None:
+        await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
+        if scheduled_start_at != "":  # Not clearing the schedule
+            await event_bus.schedule(EventType.TODO_NOTIFICATION_DUE, {"id": id}, scheduled_start_at)
+            
+    if status == "completed":
+        await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
+
 
 async def delete_todo(id: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -122,6 +132,7 @@ async def delete_todo(id: str):
         await db.commit()
     
     await event_bus.publish(EventType.TODO_DELETED, {"id": id})
+    await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
 
 
 async def get_todo_by_id(id: str):

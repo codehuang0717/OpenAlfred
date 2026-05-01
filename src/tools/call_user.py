@@ -16,7 +16,7 @@ from database import get_active_user
 logger = logging.getLogger("call-user-tool")
 
 # 最新的云端 Outbound Trunk ID
-OUTBOUND_TRUNK_ID = "ST_Bcj2LDXqL4J7"
+OUTBOUND_TRUNK_ID = config.LIVEKIT_SIP_TRUNK_ID
 
 
 def generate_sip_token():
@@ -73,19 +73,24 @@ def _room_name_to_thread_uuid(room_name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"call:{room_name}"))
 
 
-async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id: str = "default") -> str:
+async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id: str = "default", reminder_id: str = None, supervisor_id: str = None) -> str:
     """ Core logic to initiate an outbound SIP call. Returns status message. """
-    room_name = f"outbound-{user_id}-{int(time.time())}"
+    if reminder_id:
+        room_name = f"outbound-reminder-{reminder_id}-{user_id}"
+    elif supervisor_id:
+        room_name = f"outbound-supervisor-{supervisor_id}-{user_id}"
+    else:
+        room_name = f"outbound-{user_id}-{int(time.time())}"
+        
     thread_uuid = _room_name_to_thread_uuid(room_name)
     
     thread_metadata = {
         "owner": user_id,
         "type": "call",
-        "title": "语音外拨呼叫 (主动监督)",
+        "title": "语音外拨呼叫 (主动监督)" if not reminder_id else "语音提醒呼叫",
         "room_name": room_name,
+        "initial_speech": initial_speech,
     }
-    if initial_speech:
-        thread_metadata["initial_speech"] = initial_speech
 
     # Step 1: Pre-create thread
     try:
@@ -113,7 +118,7 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
     url = f"{api_url.rstrip('/')}/twirp/livekit.SIP/CreateSIPParticipant"
 
     dial_data = {
-        "sipTrunkId": OUTBOUND_TRUNK_ID,
+        "sip_trunk_id": OUTBOUND_TRUNK_ID,
         "sipCallTo": phone_number,
         "roomName": room_name,
         "participantIdentity": "agent_caller",

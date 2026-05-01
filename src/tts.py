@@ -5,6 +5,7 @@ import numpy as np
 import logging
 import wave
 import io
+import os
 from typing import AsyncGenerator
 from config import config
 
@@ -55,16 +56,24 @@ async def save_tts_to_file(text: str, output_path: str):
     Always saves at 24000Hz Mono for consistency with current system.
     """
     audio_chunks = []
+    # Add simple generator to verify data
     async for chunk in get_tts_stream(text, target_sample_rate=24000):
+        # Debug: Check chunk size
+        # logger.info(f"DEBUG: TTS chunk size: {len(chunk)}")
         audio_chunks.append(chunk)
     
     if not audio_chunks:
-        logger.error("Failed to generate audio for file")
+        logger.error(f"Failed to generate audio for file: '{text[:20]}'")
         return
+
+    # Debug: Print the path being used for saving
+    logger.info(f"DEBUG: Saving TTS audio to: {output_path}")
 
     full_audio = b"".join(audio_chunks)
     
     def save_blocking():
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with wave.open(output_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)

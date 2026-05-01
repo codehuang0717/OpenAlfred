@@ -36,7 +36,7 @@ async def _send_bark_notification(
 
 async def check_and_send_pending_reminders():
     """Scan and send reminders that are due. Supports Push and SIP calls."""
-    from tools.call_user import generate_sip_token, OUTBOUND_TRUNK_ID
+    from tools.call_user import dial_user
     
     try:
         pending = await get_pending_reminders()
@@ -44,23 +44,13 @@ async def check_and_send_pending_reminders():
             logger.info(f"Sending reminder: {r['body']} via {r['delivery_method']}")
             
             if r.get("delivery_method") == "call":
-                jwt_token = generate_sip_token()
-                api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-                if api_url.endswith("/"): api_url = api_url[:-1]
-                url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"
-                
-                room_name = f"outbound-reminder-{r['id']}"
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        url,
-                        headers={"Authorization": f"Bearer {jwt_token}"},
-                        json={
-                            "sipTrunkId": OUTBOUND_TRUNK_ID,
-                            "sipCallTo": "100",
-                            "roomName": room_name,
-                        },
-                        timeout=10.0,
-                    )
+                status = await dial_user(
+                    phone_number="100", 
+                    initial_speech=r['body'], 
+                    user_id=r.get("user_id", "default"),
+                    reminder_id=r['id']
+                )
+                logger.info(f"LiveKit SIP dialing status: {status}")
             else:
                 # Bark Push
                 await _send_bark_notification(
@@ -80,16 +70,16 @@ async def check_and_send_todo_notifications():
     try:
         pending_todos = await get_pending_todo_notifications()
         for todo in pending_todos:
-            logger.info(f"Sending notification for Todo: {todo['title']}")
-            success = await notification_service.send_todo_reminder(todo)
-            if success:
-                await mark_todo_notification_sent(todo['id'])
+            logger.info(f"Triggered notification for Todo: {todo['title']}")
+            # We don't send bark notifications for Todos anymore per user request, 
+            # we just mark it as sent so supervisor wakes up and handles it.
+            await mark_todo_notification_sent(todo['id'])
     except Exception as e:
         logger.error(f"Error in check_and_send_todo_notifications: {e}", exc_info=True)
 
 async def send_single_reminder(reminder_id: str):
     """Process a single reminder by ID."""
-    from tools.call_user import generate_sip_token, OUTBOUND_TRUNK_ID
+    from tools.call_user import dial_user
     
     try:
         r = await get_reminder_by_id(reminder_id)
@@ -99,23 +89,13 @@ async def send_single_reminder(reminder_id: str):
         logger.info(f"Triggering individual reminder: {r['body']} via {r['delivery_method']}")
         
         if r.get("delivery_method") == "call":
-            jwt_token = generate_sip_token()
-            api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-            if api_url.endswith("/"): api_url = api_url[:-1]
-            url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"
-            
-            room_name = f"outbound-reminder-{r['id']}"
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {jwt_token}"},
-                    json={
-                        "sipTrunkId": OUTBOUND_TRUNK_ID,
-                        "sipCallTo": "100",
-                        "roomName": room_name,
-                    },
-                    timeout=10.0,
-                )
+            status = await dial_user(
+                phone_number="100", 
+                initial_speech=r['body'], 
+                user_id=r.get("user_id", "default"),
+                reminder_id=r['id']
+            )
+            logger.info(f"LiveKit SIP dialing status: {status}")
         else:
             await _send_bark_notification(
                 body=r['body'],
@@ -137,9 +117,9 @@ async def send_single_todo_notification(todo_id: str):
             return
             
         logger.info(f"Triggering individual todo notification for: {todo['title']}")
-        success = await notification_service.send_todo_reminder(todo)
-        if success:
-            await mark_todo_notification_sent(todo['id'])
+        # We no longer send bark notifications for Todos per user request,
+        # just mark as sent so the supervisor is woken up and handles it.
+        await mark_todo_notification_sent(todo['id'])
     except Exception as e:
         logger.error(f"Error in send_single_todo_notification for {todo_id}: {e}", exc_info=True)
 

@@ -99,9 +99,14 @@ async def add_reminder(
             return Command(update={"messages": [ToolMessage(content=f"ERROR: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
         audio_path = ""
-        if delivery_method == "call" and call_greeting:
+        # 即使是普通提醒，我们也尝试预渲染，因为这样能确保调用 call_user 时的语音是“生成的”而不是默认音频文件
+        if call_greeting:
             filename = f"reminder_{reminder_id}.wav"
             audio_path = await pre_render_tts(call_greeting, filename)
+        elif delivery_method == "call":
+            # 如果是电话提醒但没有特定话术，至少使用 body 作为话术
+            filename = f"reminder_{reminder_id}.wav"
+            audio_path = await pre_render_tts(body, filename)
 
         await db_add_reminder(
             id=reminder_id,
