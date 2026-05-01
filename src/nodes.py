@@ -122,21 +122,12 @@ async def summarize_node(state: AgentState, config):
             combined_summary = f"{existing_summary}\n\n{new_summary}" if existing_summary else new_summary
             new_count = summarized_count + len(to_summarize)
             
-            # --- Evaluation Logging (Restored from middleware logic) ---
-            import os
-            eval_msg = f"\n=== Summary Evaluation {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n"
-            eval_msg += f"EXISTING SUMMARY:\n{existing_summary if existing_summary else 'None'}\n\n"
-            eval_msg += "MESSAGES SUMMARIZED:\n"
-            for m in to_summarize:
-                eval_msg += f"  [{getattr(m, 'type', 'N/A')}] {getattr(m, 'content', 'N/A')}\n"
-            eval_msg += f"\nNEWLY GENERATED SUMMARY:\n{new_summary}\n\n"
-            eval_msg += f"COMBINED SUMMARY:\n{combined_summary}\n"
-            eval_msg += "="*60 + "\n"
-            
-            print(eval_msg)
-            log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "summary_eval.log")
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(eval_msg)
+            # Log summary evaluation via logger (non-blocking)
+            logger.info(
+                f"Summary evaluation: {len(to_summarize)} msgs summarized | "
+                f"New summary length: {len(new_summary)} chars | "
+                f"Combined length: {len(combined_summary)} chars"
+            )
             # ----------------------------------------------------------
 
             await set_thread_memory(thread_id, combined_summary, new_count)

@@ -1,0 +1,129 @@
+"""
+Reminder repository — CRUD operations for the reminders table.
+"""
+
+import aiosqlite
+from typing import Optional
+from datetime import datetime, timezone
+from db.connection import DATABASE_PATH
+from utils.logger import get_logger
+
+_logger = get_logger("db.reminder")
+
+
+async def add_reminder(
+    id: str,
+    body: str,
+    scheduled_at: str,
+    title: Optional[str] = None,
+    subtitle: Optional[str] = None,
+    level: str = "active",
+    sound: Optional[str] = None,
+    delivery_method: str = "push",
+    audio_path: str = "",
+    user_id: str = "default",
+):
+    created_at = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO reminders (id, title, subtitle, body, scheduled_at, sent, level, sound, created_at, delivery_method, audio_path, user_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                id,
+                title,
+                subtitle,
+                body,
+                scheduled_at,
+                level,
+                sound,
+                created_at,
+                delivery_method,
+                audio_path,
+                user_id,
+            ),
+        )
+        await db.commit()
+
+
+async def get_pending_reminders():
+    now = datetime.now(timezone.utc)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reminders WHERE sent = 0 ORDER BY scheduled_at ASC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            reminders = [dict(row) for row in rows]
+
+    filtered = []
+    for r in reminders:
+        try:
+            scheduled = datetime.fromisoformat(r["scheduled_at"].replace("Z", "+00:00"))
+            if scheduled <= now:
+                filtered.append(r)
+        except (ValueError, TypeError) as e:
+            _logger.warning(f"Skipping reminder {r['id']} with unparseable scheduled_at='{r['scheduled_at']}': {e}")
+
+    return filtered
+
+
+async def mark_reminder_sent(id: str) -> bool:
+    """Mark a reminder as sent. Returns True if actually updated (idempotent)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE reminders SET sent = 1 WHERE id = ? AND sent = 0",
+            (id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def update_reminder(
+    id: str,
+    scheduled_at: Optional[str] = None,
+    title: Optional[str] = None,
+    body: Optional[str] = None,
+):
+    updates = []
+    params = []
+
+    if scheduled_at is not None:
+        updates.append("scheduled_at = ?")
+        params.append(scheduled_at)
+    if title is not None:
+        updates.append("title = ?")
+        params.append(title)
+    if body is not None:
+        updates.append("body = ?")
+        params.append(body)
+
+    if not updates:
+        return
+
+    params.append(id)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        await db.commit()
+
+
+async def get_all_reminders(user_id: str = "default"):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reminders WHERE user_id = ? ORDER BY scheduled_at DESC",
+            (user_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def delete_reminder(id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM reminders WHERE id = ?", (id,))
+        await db.commit()

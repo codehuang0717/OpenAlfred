@@ -17,3 +17,4 @@ src/utils/__pycache__/
 tests/test_supervisor.py
 agent_chrome_profile/
 src/routers/__pycache__/
+src/db/__pycache__/

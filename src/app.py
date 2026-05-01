@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
-from scheduler import check_and_send_pending_reminders
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal
 
 from utils.logger import setup_logging, get_logger
@@ -22,24 +21,11 @@ logger = get_logger("api")
 
 # --- Lifespan ---
 
-async def run_scheduler():
-    """Background task to check and send pending reminders."""
-    logger.info("Internal scheduler started!")
-    while True:
-        try:
-            await check_and_send_pending_reminders()
-        except Exception as e:
-            logger.error(f"Internal scheduler error: {e}")
-        await asyncio.sleep(60)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize DB
     await init_db()
-    
-    # Start internal scheduler for reminders (as a fallback or for simple standalone runs)
-    asyncio.create_task(run_scheduler())
-    logger.info("Internal scheduler task created")
+    logger.info("Database initialized. Reminder scheduling is handled by worker.py.")
 
     yield
 
