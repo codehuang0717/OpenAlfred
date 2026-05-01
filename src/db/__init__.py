@@ -12,7 +12,7 @@ from db.todo import (
 )
 from db.reminder import (
     add_reminder, get_pending_reminders, mark_reminder_sent,
-    update_reminder, get_all_reminders, delete_reminder,
+    update_reminder, get_all_reminders, delete_reminder, get_reminder_by_id,
 )
 from db.user import (
     create_user, get_user_by_username, get_user_by_id,

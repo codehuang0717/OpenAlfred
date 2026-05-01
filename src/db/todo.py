@@ -7,6 +7,7 @@ from typing import Optional
 from datetime import datetime, timezone
 from schema import TodoDict
 from db.connection import DATABASE_PATH
+from event_bus import event_bus, EventType
 
 
 async def get_all_todos(user_id: str = "default") -> list[TodoDict]:
@@ -53,6 +54,9 @@ async def add_todo(
             ),
         )
         await db.commit()
+
+    await event_bus.publish(EventType.TODO_CREATED, {"id": id, "user_id": user_id})
+
 
 
 async def update_todo(
@@ -106,6 +110,8 @@ async def update_todo(
         )
         await db.commit()
 
+    await event_bus.publish(EventType.TODO_UPDATED, {"id": id})
+
 
 async def delete_todo(id: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -114,6 +120,8 @@ async def delete_todo(id: str):
             (id,),
         )
         await db.commit()
+    
+    await event_bus.publish(EventType.TODO_DELETED, {"id": id})
 
 
 async def get_todo_by_id(id: str):
@@ -149,4 +157,7 @@ async def mark_todo_notification_sent(id: str) -> bool:
             (id,),
         )
         await db.commit()
-        return cursor.rowcount > 0
+        updated = cursor.rowcount > 0
+        if updated:
+            await event_bus.publish(EventType.TODO_UPDATED, {"id": id, "notification_sent": 1})
+        return updated

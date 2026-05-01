@@ -74,4 +74,7 @@ class Config:
     SUPERVISOR_PHONE_NUMBER = os.getenv("SUPERVISOR_PHONE_NUMBER", "100")
     SUPERVISOR_OCR_WINDOW_MINS = int(os.getenv("SUPERVISOR_OCR_WINDOW_MINS", "10"))
 
+    # Redis Settings (Event Bus)
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 config = Config()

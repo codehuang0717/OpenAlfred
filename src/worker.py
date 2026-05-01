@@ -6,8 +6,14 @@ import os
 # Add src to python path if necessary
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from scheduler import check_and_send_pending_reminders, check_and_send_todo_notifications
+from scheduler import (
+    check_and_send_pending_reminders, 
+    check_and_send_todo_notifications,
+    send_single_reminder,
+    send_single_todo_notification
+)
 from database import init_db
+from event_bus import event_bus, EventType
 
 from utils.logger import setup_logging, get_logger
 
@@ -20,20 +26,52 @@ async def main():
     
     # Ensure database is initialized
     await init_db()
-    logger.info("Database initialized.")
+    await event_bus.connect()
+    logger.info("Database initialized and EventBus connected.")
     
-    logger.info("Reminder scheduler started. Scanning every 30 seconds.")
+    # 1. Initial cleanup: Run the scanning logic once to handle any events missed while worker was down
+    logger.info("Running initial scan for pending items...")
+    await check_and_send_pending_reminders()
+    await check_and_send_todo_notifications()
     
+    logger.info("Starting Redis event consumer loop. Resolution: 1s. Fallback scan: 60s.")
+    
+    iteration = 0
     while True:
         try:
-            # Run the scanning logic
-            await check_and_send_pending_reminders()
-            await check_and_send_todo_notifications()
+            # 2. Check for due events in Redis (reminders, etc.)
+            due_events = await event_bus.get_due_events()
+            for event in due_events:
+                etype = event.get("type")
+                data = event.get("data", {})
+                item_id = data.get("id")
+                
+                if not item_id:
+                    continue
+
+                if etype == EventType.REMINDER_DUE.value:
+                    logger.info(f"Processing scheduled reminder event for {item_id}")
+                    await send_single_reminder(item_id)
+                elif etype == EventType.TODO_NOTIFICATION_DUE.value:
+                    logger.info(f"Processing scheduled todo notification for {item_id}")
+                    await send_single_todo_notification(item_id)
+            
+            # 3. Fallback polling: Run the full scanning logic every 60 seconds
+            # This catches any items missed if Redis was down or if events were lost
+            iteration += 1
+            if iteration >= 60:
+                logger.debug("Running periodic fallback scan...")
+                await check_and_send_pending_reminders()
+                await check_and_send_todo_notifications()
+                iteration = 0
+                
         except Exception as e:
-            logger.error(f"Error in scheduler loop: {e}", exc_info=True)
+            logger.error(f"Error in worker event loop: {e}", exc_info=True)
         
-        # Interval between scans
-        await asyncio.sleep(30)
+        # Short sleep to prevent busy-waiting
+        await asyncio.sleep(1)
+
+
 
 if __name__ == "__main__":
     try:

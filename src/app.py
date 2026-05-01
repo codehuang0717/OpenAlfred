@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
-from routers import auth, todos, reminders, threads, calls, email, settings, multimodal
+from event_bus import event_bus
+from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events
 
 from utils.logger import setup_logging, get_logger
 
@@ -25,9 +26,17 @@ logger = get_logger("api")
 async def lifespan(app: FastAPI):
     # Initialize DB
     await init_db()
-    logger.info("Database initialized. Reminder scheduling is handled by worker.py.")
+    
+    # Initialize EventBus (Redis)
+    await event_bus.connect()
+    
+    logger.info("Database initialized. EventBus connected. Reminder scheduling is handled by worker.py via Redis events.")
 
     yield
+    
+    # Cleanup
+    await event_bus.close()
+
 
 # --- App Instance ---
 
@@ -58,6 +67,8 @@ app.include_router(calls.router)
 app.include_router(email.router)
 app.include_router(settings.router)
 app.include_router(multimodal.router)
+app.include_router(events.router)
+
 
 @app.get("/")
 async def root():

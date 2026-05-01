@@ -4,7 +4,7 @@ from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -17,7 +17,7 @@ from database import (
 from config import config
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # --- Pydantic Models ---
 
@@ -55,10 +55,25 @@ def verify_jwt_token(token: str) -> dict:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    token: Optional[str] = Query(None)
 ) -> dict:
     """FastAPI dependency: extract and verify the current user from JWT."""
-    payload = verify_jwt_token(credentials.credentials)
+    jwt_token = None
+    
+    if credentials:
+        jwt_token = credentials.credentials
+    elif token:
+        jwt_token = token
+        
+    if not jwt_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    payload = verify_jwt_token(jwt_token)
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")

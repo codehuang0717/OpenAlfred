@@ -7,7 +7,9 @@ from database import (
     get_pending_reminders,
     mark_reminder_sent,
     get_pending_todo_notifications,
-    mark_todo_notification_sent
+    mark_todo_notification_sent,
+    get_reminder_by_id,
+    get_todo_by_id,
 )
 from notification_service import notification_service
 
@@ -84,3 +86,60 @@ async def check_and_send_todo_notifications():
                 await mark_todo_notification_sent(todo['id'])
     except Exception as e:
         logger.error(f"Error in check_and_send_todo_notifications: {e}", exc_info=True)
+
+async def send_single_reminder(reminder_id: str):
+    """Process a single reminder by ID."""
+    from tools.call_user import generate_sip_token, OUTBOUND_TRUNK_ID
+    
+    try:
+        r = await get_reminder_by_id(reminder_id)
+        if not r or r.get("sent"):
+            return
+
+        logger.info(f"Triggering individual reminder: {r['body']} via {r['delivery_method']}")
+        
+        if r.get("delivery_method") == "call":
+            jwt_token = generate_sip_token()
+            api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+            if api_url.endswith("/"): api_url = api_url[:-1]
+            url = f"{api_url}/twirp/livekit.SIP/CreateSIPParticipant"
+            
+            room_name = f"outbound-reminder-{r['id']}"
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {jwt_token}"},
+                    json={
+                        "sipTrunkId": OUTBOUND_TRUNK_ID,
+                        "sipCallTo": "100",
+                        "roomName": room_name,
+                    },
+                    timeout=10.0,
+                )
+        else:
+            await _send_bark_notification(
+                body=r['body'],
+                title=r.get('title'),
+                subtitle=r.get('subtitle'),
+                level=r.get('level', 'active'),
+                sound=r.get('sound')
+            )
+        
+        await mark_reminder_sent(r["id"])
+    except Exception as e:
+        logger.error(f"Error in send_single_reminder for {reminder_id}: {e}", exc_info=True)
+
+async def send_single_todo_notification(todo_id: str):
+    """Process a single todo notification by ID."""
+    try:
+        todo = await get_todo_by_id(todo_id)
+        if not todo or todo.get("notification_sent") or todo.get("status") == "completed":
+            return
+            
+        logger.info(f"Triggering individual todo notification for: {todo['title']}")
+        success = await notification_service.send_todo_reminder(todo)
+        if success:
+            await mark_todo_notification_sent(todo['id'])
+    except Exception as e:
+        logger.error(f"Error in send_single_todo_notification for {todo_id}: {e}", exc_info=True)
+

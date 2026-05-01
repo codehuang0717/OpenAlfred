@@ -7,6 +7,7 @@ from typing import Optional
 from datetime import datetime, timezone
 from db.connection import DATABASE_PATH
 from utils.logger import get_logger
+from event_bus import event_bus, EventType
 
 _logger = get_logger("db.reminder")
 
@@ -46,6 +47,11 @@ async def add_reminder(
         )
         await db.commit()
 
+    # Publish creation event for UI
+    await event_bus.publish(EventType.REMINDER_CREATED, {"id": id, "user_id": user_id})
+    # Schedule precise trigger in Redis delayed queue
+    await event_bus.schedule(EventType.REMINDER_DUE, {"id": id}, scheduled_at)
+
 
 async def get_pending_reminders():
     now = datetime.now(timezone.utc)
@@ -78,7 +84,10 @@ async def mark_reminder_sent(id: str) -> bool:
             (id,),
         )
         await db.commit()
-        return cursor.rowcount > 0
+        updated = cursor.rowcount > 0
+        if updated:
+            await event_bus.publish(EventType.REMINDER_SENT, {"id": id})
+        return updated
 
 
 async def update_reminder(
@@ -111,6 +120,11 @@ async def update_reminder(
         )
         await db.commit()
 
+    await event_bus.publish(EventType.REMINDER_UPDATED, {"id": id})
+    if scheduled_at:
+        # Re-schedule in delayed queue
+        await event_bus.schedule(EventType.REMINDER_DUE, {"id": id}, scheduled_at)
+
 
 async def get_all_reminders(user_id: str = "default"):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -127,3 +141,18 @@ async def delete_reminder(id: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM reminders WHERE id = ?", (id,))
         await db.commit()
+    
+    await event_bus.publish(EventType.REMINDER_DELETED, {"id": id})
+    # Remove from delayed queue if present
+    await event_bus.unschedule(EventType.REMINDER_DUE, {"id": id})
+
+
+async def get_reminder_by_id(id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
