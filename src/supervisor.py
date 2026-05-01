@@ -38,12 +38,11 @@ from rich.panel import Panel
 
 console = Console()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("supervisor")
+from utils.logger import setup_logging, get_logger
+
+# Initialize unified logging
+setup_logging(log_file="supervisor.log")
+logger = get_logger("supervisor")
 
 def get_screenpipe_process():
     for proc in psutil.process_iter(['name']):

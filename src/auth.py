@@ -8,11 +8,11 @@ Integrates with LangGraph Server's built-in auth system to:
 """
 
 import jwt
-import logging
+from utils.logger import get_logger
 from langgraph_sdk import Auth
 from config import config
 
-logger = logging.getLogger("auth")
+logger = get_logger("auth")
 
 auth = Auth()
 

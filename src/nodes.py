@@ -1,4 +1,4 @@
-import logging
+from utils.logger import get_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Literal
@@ -12,7 +12,7 @@ from prompts import AGENT_SYSTEM_PROMPT
 from database import get_thread_memory, set_thread_memory
 from context_manager import ContextManager
 
-logger = logging.getLogger("graph-nodes")
+logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
 
 async def load_context_node(state: AgentState, config):

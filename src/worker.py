@@ -9,13 +9,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from scheduler import check_and_send_pending_reminders, check_and_send_todo_notifications
 from database import init_db
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("worker")
+from utils.logger import setup_logging, get_logger
+
+# Initialize unified logging
+setup_logging(log_file="worker.log")
+logger = get_logger("worker")
 
 async def main():
     logger.info("Starting OpenAlfred Background Worker...")

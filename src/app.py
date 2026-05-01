@@ -14,9 +14,11 @@ from database import init_db
 from scheduler import check_and_send_pending_reminders
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("api")
+from utils.logger import setup_logging, get_logger
+
+# Initialize unified logging
+setup_logging(log_file="api.log")
+logger = get_logger("api")
 
 # --- Lifespan ---
 

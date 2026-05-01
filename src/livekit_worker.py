@@ -32,10 +32,15 @@ from database import (
     init_db,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("livekit-worker")
+from utils.logger import setup_logging, get_logger
+
+# Initialize unified logging
+setup_logging(log_file="livekit.log")
+logger = get_logger("livekit-worker")
+
+# Silence some noisy third-party loggers already handled by setup_logging, 
+# but adding a few more specific to livekit.
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger.info("Pre-loading Silero VAD model...")
 GLOBAL_VAD = silero.VAD.load(min_silence_duration=1.0)

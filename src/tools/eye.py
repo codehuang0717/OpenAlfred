@@ -1,9 +1,9 @@
 import httpx
-import logging
+from utils.logger import get_logger
 from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
 
-logger = logging.getLogger("eye-tool")
+logger = get_logger("eye-tool")
 
 SCREENPIPE_URL = "http://localhost:3030"
 

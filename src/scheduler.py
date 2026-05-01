@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from utils.logger import get_logger
 import httpx
 from datetime import datetime, timezone
 from config import config
@@ -11,7 +11,7 @@ from database import (
 )
 from notification_service import notification_service
 
-logger = logging.getLogger("scheduler")
+logger = get_logger("scheduler")
 
 async def _send_bark_notification(
     body: str,

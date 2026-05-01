@@ -1,9 +1,9 @@
 import httpx
-import logging
+from utils.logger import get_logger
 from typing import Optional, Literal
 from config import config
 
-logger = logging.getLogger("notification_service")
+logger = get_logger("notification_service")
 
 class NotificationService:
     """
