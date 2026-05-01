@@ -38,6 +38,7 @@ class EventType(str, Enum):
 
     # Supervisor events
     SUPERVISOR_STATE_CHANGED = "supervisor.state_changed"
+    SUPERVISOR_WAKEUP = "supervisor.wakeup"
 
 
 # ─── Channel constants ───────────────────────────────────────────────────

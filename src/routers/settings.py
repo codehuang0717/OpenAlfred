@@ -14,7 +14,8 @@ class ModelSelectionRequest(BaseModel):
     model_selection: str = "gpt-cloud"
 
 class SupervisorConfigRequest(BaseModel):
-    enabled: bool
+    recording_enabled: bool
+    smart_supervision_enabled: bool
 
 @router.get("/models")
 async def get_models():
@@ -62,11 +63,34 @@ async def check_ollama_status():
 @router.get("/supervisor/config")
 async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
     """Get the current supervisor enabled status."""
-    enabled_str = await get_setting("supervisor_enabled", "true")
-    return {"enabled": enabled_str.lower() == "true"}
+    recording_enabled_str = await get_setting("recording_enabled", "true")
+    smart_supervision_enabled_str = await get_setting("smart_supervision_enabled", "true")
+    
+    # Fallback for backward compatibility
+    if not recording_enabled_str and not smart_supervision_enabled_str:
+        old_enabled_str = await get_setting("supervisor_enabled", "true")
+        recording_enabled_str = old_enabled_str
+        smart_supervision_enabled_str = old_enabled_str
+
+    return {
+        "recording_enabled": recording_enabled_str.lower() == "true",
+        "smart_supervision_enabled": smart_supervision_enabled_str.lower() == "true"
+    }
 
 @router.post("/supervisor/config")
 async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = Depends(get_current_user)):
     """Set the supervisor enabled status."""
-    await set_setting("supervisor_enabled", str(data.enabled).lower())
-    return {"status": "updated", "enabled": data.enabled}
+    await set_setting("recording_enabled", str(data.recording_enabled).lower())
+    await set_setting("smart_supervision_enabled", str(data.smart_supervision_enabled).lower())
+    
+    # Update legacy setting for compatibility
+    await set_setting("supervisor_enabled", str(data.smart_supervision_enabled).lower())
+
+    from event_bus import event_bus, EventType
+    await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
+
+    return {
+        "status": "updated", 
+        "recording_enabled": data.recording_enabled,
+        "smart_supervision_enabled": data.smart_supervision_enabled
+    }

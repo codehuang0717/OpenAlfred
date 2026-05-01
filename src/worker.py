@@ -55,6 +55,8 @@ async def main():
                 elif etype == EventType.TODO_NOTIFICATION_DUE.value:
                     logger.info(f"Processing scheduled todo notification for {item_id}")
                     await send_single_todo_notification(item_id)
+                    # Notify the supervisor to wake up immediately
+                    await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
             
             # 3. Fallback polling: Run the full scanning logic every 60 seconds
             # This catches any items missed if Redis was down or if events were lost

@@ -62,11 +62,18 @@ def start_screenpipe():
 def stop_screenpipe():
     proc = get_screenpipe_process()
     if proc:
-        logger.info("Stopping screenpipe dynamically to save resources...")
+        logger.info("Stopping screenpipe and its children dynamically to save resources...")
         try:
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
             proc.kill()
-        except:
+        except psutil.NoSuchProcess:
             pass
+        except Exception as e:
+            logger.error(f"Error stopping screenpipe: {e}")
 
 
 class SupervisorDecision(BaseModel):
@@ -82,16 +89,26 @@ class ProactiveSupervisor:
         self.model = get_model("gpt-cloud").with_structured_output(SupervisorDecision)
 
     async def run_cycle(self):
-        # 0. Check if Supervision is enabled in settings
-        is_enabled_str = await get_setting("supervisor_enabled", "true")
-        supervision_enabled = (is_enabled_str.lower() == "true")
+        # 0. Check if Supervision/Recording is enabled in settings
+        recording_str = await get_setting("recording_enabled", "true")
+        smart_str = await get_setting("smart_supervision_enabled", "true")
+        
+        recording_enabled = (recording_str.lower() == "true")
+        smart_supervision_enabled = (smart_str.lower() == "true")
 
-        if not supervision_enabled:
-            logger.info("Supervision is currently DISABLED. Skipping cycle.")
+        if not recording_enabled:
+            logger.info("Recording is currently DISABLED. Skipping cycle and stopping Screenpipe.")
             stop_screenpipe()
             return
+            
+        # If recording is enabled, ensure screenpipe is running
+        start_screenpipe()
+        
+        if not smart_supervision_enabled:
+            logger.info("Smart Supervision is currently DISABLED. Screenpipe is running, but skipping LLM analysis.")
+            return
 
-        logger.info("--- Starting Supervision Cycle ---")
+        logger.info("--- Starting Smart Supervision Cycle ---")
         
         # 1. Fetch Active User
         active_user = await get_active_user()
@@ -152,14 +169,10 @@ class ProactiveSupervisor:
 
         if not active_todos:
             logger.info(f"User {username} has no active tasks at this time. Monitoring status: Idle.")
-            stop_screenpipe()
             if state.get('is_distracted'):
                 # Also reset distraction if user was distracted but now has no tasks to do
                 await reset_supervisor_state(user_id)
             return
-
-        # Start screenpipe if not running
-        start_screenpipe()
 
         ocr_context = await get_recent_ocr_text(minutes=config.SUPERVISOR_OCR_WINDOW_MINS)
         
@@ -242,9 +255,20 @@ class ProactiveSupervisor:
         except Exception as e:
             logger.error(f"Error in supervision logic: {e}")
 
+    async def _listen_for_wakeups(self, wakeup_event: asyncio.Event):
+        from event_bus import event_bus, EventType
+        async for event in event_bus.subscribe(EventType.SUPERVISOR_WAKEUP.value):
+            logger.info("Supervisor received wakeup event!")
+            wakeup_event.set()
+
     async def start(self):
         await init_db()
+        from event_bus import event_bus
+        await event_bus.connect()
         logger.info(f"Supervisor Service Initialized. Interval: {config.SUPERVISOR_INTERVAL}s")
+        
+        wakeup_event = asyncio.Event()
+        asyncio.create_task(self._listen_for_wakeups(wakeup_event))
         
         while True:
             try:
@@ -252,7 +276,13 @@ class ProactiveSupervisor:
             except Exception as e:
                 logger.error(f"Critical error in supervisor cycle: {e}")
                 
-            await asyncio.sleep(config.SUPERVISOR_INTERVAL) 
+            try:
+                await asyncio.wait_for(wakeup_event.wait(), timeout=config.SUPERVISOR_INTERVAL)
+                logger.info("Supervisor cycle triggered early by wakeup event.")
+                wakeup_event.clear()
+            except asyncio.TimeoutError:
+                # Normal interval passed
+                pass
 
 if __name__ == "__main__":
     supervisor = ProactiveSupervisor()
