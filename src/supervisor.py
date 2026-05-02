@@ -64,7 +64,7 @@ def get_screenpipe_process():
 def start_screenpipe() -> bool:
     if not get_screenpipe_process():
         logger.info("Starting screenpipe dynamically...")
-        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "body", "windows_system", "eye", "setup_eye.ps1")
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "body", "windows_system", "eye", "setup_eye.ps1")
         subprocess.Popen(
             ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_path],
             creationflags=subprocess.CREATE_NO_WINDOW
