@@ -22,6 +22,16 @@ import time
 import numpy as np
 from datetime import datetime
 from config import config
+import sys
+
+# Force local mode if --local flag is present
+# We do this AFTER config import because config.py uses override=True
+if "--local" in sys.argv:
+    os.environ["LIVEKIT_URL"] = "ws://localhost:7880"
+    # Also inject the official --url flag for the CLI to be 100% sure
+    if "--url" not in sys.argv:
+        sys.argv.extend(["--url", "ws://localhost:7880"])
+    sys.argv.remove("--local")
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad
 from livekit.plugins import silero
@@ -328,6 +338,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
     source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("tts", source)
     publication = await room.local_participant.publish_track(track)
+    logger.info(f"DEBUG-PUBLISHING: Published NEW TTS track: {publication.sid}")
     try:
         latency_tracker.start("tts_first_chunk")
         first_chunk_found = False
@@ -399,6 +410,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
     except asyncio.CancelledError:
         logger.info("[VoiceInterrupt] TTS audio task cancelled gracefully.")
     finally:
+        logger.info(f"DEBUG-PUBLISHING: Unpublishing TTS track: {publication.sid}")
         await room.local_participant.unpublish_track(publication.sid)
         if "[TERMINATE]" in text:
             logger.info("Termination signal detected in Agent response. Hanging up...")
@@ -525,7 +537,7 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
                     samples_per_channel=len(chunk),
                 )
                 await source.capture_frame(frame)
-        await asyncio.sleep(len(audio_np) / 24000 + 0.5)
+        await asyncio.sleep(len(audio_np) / 24000)
     except Exception as e:
         logger.error(f"Error in play_greeting: {e}")
     finally:
@@ -547,31 +559,30 @@ async def entrypoint(ctx: JobContext):
     room = ctx.room
     should_exit = asyncio.Event()
 
-    call_type = "outbound" if room.name.startswith("outbound-") else "inbound"
+    # Determine call type based on room name prefix
+    if room.name.startswith("outbound-"):
+        call_type = "outbound"
+    elif room.name.startswith("local-"):
+        call_type = "local"
+    else:
+        call_type = "inbound"
     
-    # For inbound calls, we MUST Use a unique session ID to avoid grouping separate calls into one thread
-    # room.name for inbound is often just 'inbound'. room.sid or ctx.job.id is unique.
+    logger.info(f"Detected call type: {call_type} for room: {room.name}")
+
+    # For inbound/local calls, we MUST Use a unique session ID to avoid grouping separate calls into one thread
     unique_session_id = room.name
-    if call_type == "inbound":
+    if call_type in ("inbound", "local"):
         unique_session_id = f"{room.name}-{ctx.job.id}"
     
     user_id = "default"
 
-
     if call_type == "outbound":
-        # Format 1: outbound-{user_id}-{timestamp}
-        # Format 2: outbound-reminder-{reminder_id}-{user_id}
-        # Format 3: outbound-supervisor-{supervisor_id}-{user_id}
+        # ... (existing outbound logic)
         if room.name.startswith("outbound-reminder-"):
-            # room.name looks like outbound-reminder-UUID-USERID
-            # "outbound-reminder-" is 18 chars. UUID is 36 chars.
-            # Then we have a '-' which is 1 char. The rest is user_id.
             user_id = room.name[18 + 36 + 1:]
             if not user_id:
                 user_id = "default"
         elif room.name.startswith("outbound-supervisor-"):
-            # outbound-supervisor-sup_1234567890-userid
-            # parts[0]=outbound, parts[1]=supervisor, parts[2]=sup_id, parts[3:]=user_id
             parts = room.name.split("-")
             if len(parts) >= 4:
                 user_id = "-".join(parts[3:])
@@ -580,9 +591,16 @@ async def entrypoint(ctx: JobContext):
         else:
             parts = room.name.split("-")
             if len(parts) >= 3:
-                # Format 1: Reconstruct the user_id (which might have hyphens) from the middle parts
                 user_id = "-".join(parts[1:-1])
+    elif call_type == "local":
+        # For local calls, try to get user_id from room name (e.g., local-userid-timestamp)
+        parts = room.name.split("-")
+        if len(parts) >= 2:
+            user_id = parts[1]
+        else:
+            user_id = "default"
     else:
+        # Inbound (Cloud SIP)
         # TODO: 暂时先绑定到FlyingPig账号的名下，下一轮修改为动态映射
         try:
             from database import get_user_by_username
@@ -595,22 +613,33 @@ async def entrypoint(ctx: JobContext):
     # ── CRITICAL: Register event handlers IMMEDIATELY ──
     answered_event = asyncio.Event() 
     greeting_played = False
+    is_greeting_playing = False # Tracking initial greeting state
     greeting_lock = asyncio.Lock()
+    active_audio_tasks = {} # identity -> Task
 
     async def trigger_greeting():
-        nonlocal greeting_played
+        nonlocal greeting_played, is_greeting_playing
         async with greeting_lock:
             if greeting_played:
                 return
             greeting_played = True
+            is_greeting_playing = True # Start suppression
             logger.info(f"Triggering greeting for {call_type} call (session: {unique_session_id})")
-            if call_type == "outbound":
-
-                await asyncio.sleep(0.5)
-            await play_greeting(room, initial_speech, should_exit, user_id, call_type)
+            
+            try:
+                current_initial_speech = initial_speech
+                if call_type == "local" and not current_initial_speech:
+                    current_initial_speech = "我在，请讲。"
+                
+                if call_type == "outbound":
+                    await asyncio.sleep(0.5)
+                await play_greeting(room, current_initial_speech, should_exit, user_id, call_type)
+            finally:
+                is_greeting_playing = False # End suppression
+                logger.info("Initial greeting finished, now listening to user...")
 
     # ── Create / retrieve LangGraph thread and read initial_speech ──
-    call_title = "语音外拨呼叫" if call_type == "outbound" else "语音呼入接待"
+    call_title = "本地语音唤醒" if call_type == "local" else ("语音外拨呼叫" if call_type == "outbound" else "语音呼入接待")
     thread_info = await _ensure_thread(unique_session_id, user_id, call_title, call_type)
     thread_uuid = thread_info["thread_uuid"]
 
@@ -659,12 +688,27 @@ async def entrypoint(ctx: JobContext):
     @room.on("track_subscribed")
     def on_track_subscribed(track, publication, participant):
         if isinstance(track, rtc.AudioTrack):
-            logger.info(f"Subscribed to audio track {track.sid} from {participant.identity}")
-            asyncio.create_task(process_audio_safe(track, room, should_exit, user_id))
-            # Some SIP providers don't update callStatus but start audio.
-            # We'll use track subscription as a fallback, but only if it's the right identity
-            # or if we are desperate. For now, let's trust callStatus FIRST.
-            if call_type == "inbound":
+            logger.info(f"DEBUG-SUBSCRIPTION: Subscribed to NEW audio track! SID: {track.sid}, Participant: {participant.identity}")
+            
+            # Prevent duplicate processing tasks for the same participant
+            if participant.identity in active_audio_tasks:
+                logger.warning(f"DEBUG-SUBSCRIPTION: Duplicate track detected for {participant.identity}. Existing task is still active. Ignoring SID: {track.sid}")
+                return
+
+            is_sip = participant.identity.startswith("sip_")
+            logger.info(f"DEBUG-SUBSCRIPTION: Starting process_audio_safe for SID: {track.sid} (is_sip={is_sip})")
+            task = asyncio.create_task(process_audio_safe(track, room, should_exit, user_id, get_greeting_state=lambda: is_greeting_playing, is_sip=is_sip))
+            active_audio_tasks[participant.identity] = task
+            
+            def on_task_done(t):
+                logger.info(f"DEBUG-SUBSCRIPTION: Audio task for {participant.identity} has FINISHED.")
+                if active_audio_tasks.get(participant.identity) == t:
+                    active_audio_tasks.pop(participant.identity, None)
+            task.add_done_callback(on_task_done)
+            
+            # Auto-answer for local SDK participants or any inbound audio
+            if call_type in ("inbound", "local") or not participant.identity.startswith("sip_"):
+                logger.info(f"Auto-triggering conversation for participant: {participant.identity}")
                 answered_event.set()
                 asyncio.create_task(trigger_greeting())
 
@@ -811,7 +855,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
 
 
 async def process_audio_safe(
-    track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str
+    track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str, get_greeting_state=None, is_sip=False
 ):
     audio_stream = rtc.AudioStream(track)
     vad_stream = GLOBAL_VAD.stream()
@@ -823,11 +867,14 @@ async def process_audio_safe(
     interrupt_event = asyncio.Event()
     current_tts_task = None
     current_transition_task = None
+    last_activity_time = time.time()
+    SILENCE_TIMEOUT = 10.0
 
     async def vad_logic():
-        nonlocal is_speaking, all_frames, current_tts_task, current_transition_task
+        nonlocal is_speaking, all_frames, current_tts_task, current_transition_task, last_activity_time
         async for event in vad_stream:
             if event.type == vad.VADEventType.START_OF_SPEECH:
+                last_activity_time = time.time()
                 latency_tracker.start("vad_silence")
                 is_speaking = True
                 
@@ -858,6 +905,7 @@ async def process_audio_safe(
                         latency_tracker.start("agent_response")
                         
                         final_resp_text = ""
+                        is_agent_processing = True
                         async for event_type, payload in call_agent(session_id, text, user_id):
                             if interrupt_event.is_set():
                                 break
@@ -871,6 +919,8 @@ async def process_audio_safe(
                                 )
                             elif event_type == "message":
                                 final_resp_text = payload
+                        
+                        is_agent_processing = False
                                 
                         latency_tracker.end("agent_response")
                         latency_tracker.end("end_to_end")
@@ -928,8 +978,28 @@ async def process_audio_safe(
                 all_frames = []
 
     vad_task = asyncio.create_task(vad_logic())
+    is_agent_processing = False # Flag to track if we are waiting for LLM/Tools
+
     try:
         async for frame_event in audio_stream:
+            # CRITICAL: Discard frames while the initial greeting is playing, 
+            # BUT ONLY for local calls. SIP gateways have built-in AEC.
+            if get_greeting_state and get_greeting_state() and not is_sip:
+                last_activity_time = time.time()
+                continue
+
+            # Update activity if agent is busy (Speaking, Transitioning, or Thinking)
+            if (current_tts_task and not current_tts_task.done()) or \
+               (current_transition_task and not current_transition_task.done()) or \
+               is_agent_processing or is_speaking:
+                last_activity_time = time.time()
+
+            # Check for silence timeout
+            if time.time() - last_activity_time > SILENCE_TIMEOUT:
+                logger.info(f"DEBUG-TIMEOUT: 10s silence detected. Hanging up session {session_id}...")
+                should_exit.set()
+                break
+
             vad_stream.push_frame(frame_event.frame)
             if is_speaking:
                 all_frames.append(frame_event.frame)
@@ -941,4 +1011,5 @@ async def process_audio_safe(
 
 
 if __name__ == "__main__":
+    logger.info(f"Starting LiveKit worker... URL: {os.environ.get('LIVEKIT_URL')}")
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

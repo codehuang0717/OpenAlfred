@@ -2,7 +2,9 @@ import asyncio
 import logging
 import pyaudio
 import numpy as np
+import time
 from .wakeword import WakeWordService
+from .local_livekit_client import LocalLiveKitClient
 
 logger = logging.getLogger("ear-service")
 
@@ -23,12 +25,32 @@ class EarService:
         self.RATE = 16000
         self.CHUNK = 1280 # 80ms chunks
 
-    def start(self, on_detect_callback):
+        # LiveKit Integration
+        self.lk_client = LocalLiveKitClient(url="ws://localhost:7880")
+        self.lk_client.on_disconnect = self.exit_conversation_mode
+        self.in_conversation = False
+        self.last_activity_time = 0
+        self.last_exit_time = 0.0 # Cooldown to avoid accidental re-wake
+        self.conversation_timeout = 10.0 # Auto-hangup after 10s of silence
+
+    async def start(self, on_detect_callback=None):
         """Start listening for wake words."""
         if self.is_running:
             return
         
-        self.wakeword_service.set_callback(on_detect_callback)
+        # Set internal callback that bridges to LiveKit
+        async def internal_callback(name, score):
+            # Check for cooldown
+            if time.time() - self.last_exit_time < 1.5:
+                logger.info(f"Ignoring wake word '{name}' during cooldown period.")
+                return
+
+            logger.info(f"*** Wake Word '{name}' triggered integration flow ***")
+            if on_detect_callback:
+                on_detect_callback(name, score)
+            await self.enter_conversation_mode()
+
+        self.wakeword_service.set_callback(lambda n, s: asyncio.create_task(internal_callback(n, s)))
         self.wakeword_service.initialize()
         
         self.stream = self.audio.open(
@@ -42,20 +64,69 @@ class EarService:
         self.is_running = True
         logger.info("Ear service started, listening for wake words...")
         
-        # Start the processing loop in a thread or task
-        # For simplicity in this step, we'll use a blocking loop that can be run in a task
         asyncio.create_task(self._listen_loop())
+
+    async def enter_conversation_mode(self):
+        """Switch from wake-word detection to active LiveKit conversation."""
+        if self.in_conversation:
+            return
+            
+        logger.info("*** WAKE WORD DETECTED: Entering conversation mode ***")
+        
+        # Play a quick "beep" locally
+        try:
+            p = pyaudio.PyAudio()
+            fs = 44100
+            duration = 0.1
+            f = 880.0
+            samples = (np.sin(2*np.pi*np.arange(fs*duration)*f/fs)).astype(np.float32)
+            beep_stream = p.open(format=pyaudio.paFloat32, channels=1, rate=fs, output=True)
+            beep_stream.write(0.3 * samples)
+            beep_stream.stop_stream()
+            beep_stream.close()
+            p.terminate()
+        except:
+            pass
+
+        self.in_conversation = True
+        self.last_activity_time = time.time()
+        
+        # Room name: local-{timestamp}
+        room_name = f"local-user-{int(time.time())}"
+        await self.lk_client.connect(room_name=room_name)
+
+    async def exit_conversation_mode(self):
+        """Switch back to wake-word detection."""
+        if not self.in_conversation:
+            return
+            
+        logger.info("Exiting conversation mode, returning to wake-word detection.")
+        await self.lk_client.disconnect()
+        self.in_conversation = False
+        self.last_exit_time = time.time() # Start cooldown
+        if self.wakeword_service.model:
+            self.wakeword_service.model.reset()
 
     async def _listen_loop(self):
         try:
             while self.is_running:
-                # Use run_in_executor to avoid blocking the event loop with PyAudio read
+                # Read from mic
                 data = await asyncio.get_event_loop().run_in_executor(
                     None, self.stream.read, self.CHUNK, False
                 )
                 audio_np = np.frombuffer(data, dtype=np.int16)
-                self.wakeword_service.process_audio(audio_np)
-                # Small sleep to yield
+
+                if self.in_conversation:
+                    # Route to LiveKit Agent
+                    self.lk_client.push_audio(audio_np)
+                    
+                    # Basic silence timeout logic (optional, Agent usually hangs up)
+                    # if time.time() - self.last_activity_time > self.conversation_timeout:
+                    #    await self.exit_conversation_mode()
+                else:
+                    # Route to WakeWord detection
+                    self.wakeword_service.process_audio(audio_np)
+                
                 await asyncio.sleep(0.01)
         except Exception as e:
             logger.error(f"Error in ear listen loop: {e}")
@@ -69,19 +140,26 @@ class EarService:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
+        
+        # Cleanup LiveKit
+        if self.lk_client.is_connected:
+            asyncio.create_task(self.lk_client.disconnect())
+            
         logger.info("Ear service stopped.")
 
-if __name__ == "__main__":
-    # Test script
+async def main():
     logging.basicConfig(level=logging.INFO)
     
     def on_wake(name, score):
         print(f"\a*** WAKE WORD DETECTED: {name} ({score:.2f}) ***")
 
     ear = EarService()
-    loop = asyncio.get_event_loop()
     try:
-        ear.start(on_wake)
-        loop.run_forever()
+        await ear.start(on_wake)
+        while True:
+            await asyncio.sleep(1)
     except KeyboardInterrupt:
         ear.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
