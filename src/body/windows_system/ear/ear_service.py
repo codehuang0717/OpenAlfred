@@ -77,8 +77,24 @@ class EarService:
         logger.info("*** WAKE WORD DETECTED: Entering conversation mode ***")
         
         self.is_playing_sfx = True
-        # Play pre-recorded "I'm here" voice locally for ultra-low latency
+        # 1. Play a quick immediate "ding" for instant feedback
         try:
+            p = pyaudio.PyAudio()
+            fs = 44100
+            duration = 0.1
+            f = 880.0
+            samples = (np.sin(2*np.pi*np.arange(fs*duration)*f/fs)).astype(np.float32)
+            beep_stream = p.open(format=pyaudio.paFloat32, channels=1, rate=fs, output=True)
+            beep_stream.write(0.3 * samples)
+            beep_stream.stop_stream()
+            beep_stream.close()
+            p.terminate()
+        except:
+            pass
+
+        # 2. Wait a bit then play the voice
+        try:
+            time.sleep(0.3) # Brief pause for natural feel
             base_dir = r"E:\PythonProjects\OpenAlfred\agent"
             wake_wav = os.path.join(base_dir, "assets", "sounds", "wake_up.wav")
             
