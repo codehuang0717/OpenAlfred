@@ -613,20 +613,23 @@ async def entrypoint(ctx: JobContext):
     # ── CRITICAL: Register event handlers IMMEDIATELY ──
     answered_event = asyncio.Event() 
     greeting_played = False
-    is_greeting_playing = False # Tracking initial greeting state
     greeting_lock = asyncio.Lock()
     active_audio_tasks = {} # identity -> Task
 
     async def trigger_greeting():
-        nonlocal greeting_played, is_greeting_playing
+        nonlocal greeting_played
         async with greeting_lock:
             if greeting_played:
                 return
             greeting_played = True
-            is_greeting_playing = True # Start suppression
             logger.info(f"Triggering greeting for {call_type} call (session: {unique_session_id})")
             
             try:
+                # CRITICAL: For local calls, we already played the wake voice locally in EarService.
+                if call_type == "local":
+                    logger.info("Skipping cloud greeting for local call (already played locally).")
+                    return
+                
                 current_initial_speech = initial_speech
                 if call_type == "local" and not current_initial_speech:
                     current_initial_speech = "我在，请讲。"
@@ -634,9 +637,8 @@ async def entrypoint(ctx: JobContext):
                 if call_type == "outbound":
                     await asyncio.sleep(0.5)
                 await play_greeting(room, current_initial_speech, should_exit, user_id, call_type)
-            finally:
-                is_greeting_playing = False # End suppression
-                logger.info("Initial greeting finished, now listening to user...")
+            except Exception as e:
+                logger.error(f"Error in trigger_greeting: {e}")
 
     # ── Create / retrieve LangGraph thread and read initial_speech ──
     call_title = "本地语音唤醒" if call_type == "local" else ("语音外拨呼叫" if call_type == "outbound" else "语音呼入接待")
@@ -697,7 +699,7 @@ async def entrypoint(ctx: JobContext):
 
             is_sip = participant.identity.startswith("sip_")
             logger.info(f"DEBUG-SUBSCRIPTION: Starting process_audio_safe for SID: {track.sid} (is_sip={is_sip})")
-            task = asyncio.create_task(process_audio_safe(track, room, should_exit, user_id, get_greeting_state=lambda: is_greeting_playing, is_sip=is_sip))
+            task = asyncio.create_task(process_audio_safe(track, room, should_exit, user_id, is_sip=is_sip))
             active_audio_tasks[participant.identity] = task
             
             def on_task_done(t):
@@ -855,7 +857,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
 
 
 async def process_audio_safe(
-    track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str, get_greeting_state=None, is_sip=False
+    track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str, is_sip=False
 ):
     audio_stream = rtc.AudioStream(track)
     vad_stream = GLOBAL_VAD.stream()
@@ -982,13 +984,7 @@ async def process_audio_safe(
 
     try:
         async for frame_event in audio_stream:
-            # CRITICAL: Discard frames while the initial greeting is playing, 
-            # BUT ONLY for local calls. SIP gateways have built-in AEC.
-            if get_greeting_state and get_greeting_state() and not is_sip:
-                last_activity_time = time.time()
-                continue
-
-            # Update activity if agent is busy (Speaking, Transitioning, or Thinking)
+            # Update activity if agent is busy (Speaking, Transitioning, Thinking, or Greeting)
             if (current_tts_task and not current_tts_task.done()) or \
                (current_transition_task and not current_transition_task.done()) or \
                is_agent_processing or is_speaking:

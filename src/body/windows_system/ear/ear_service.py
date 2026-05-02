@@ -3,6 +3,8 @@ import logging
 import pyaudio
 import numpy as np
 import time
+import os
+import wave
 from .wakeword import WakeWordService
 from .local_livekit_client import LocalLiveKitClient
 
@@ -29,6 +31,7 @@ class EarService:
         self.lk_client = LocalLiveKitClient(url="ws://localhost:7880")
         self.lk_client.on_disconnect = self.exit_conversation_mode
         self.in_conversation = False
+        self.is_playing_sfx = False # Flag to avoid pushing mic data during local playback
         self.last_activity_time = 0
         self.last_exit_time = 0.0 # Cooldown to avoid accidental re-wake
         self.conversation_timeout = 10.0 # Auto-hangup after 10s of silence
@@ -73,20 +76,30 @@ class EarService:
             
         logger.info("*** WAKE WORD DETECTED: Entering conversation mode ***")
         
-        # Play a quick "beep" locally
+        self.is_playing_sfx = True
+        # Play pre-recorded "I'm here" voice locally for ultra-low latency
         try:
-            p = pyaudio.PyAudio()
-            fs = 44100
-            duration = 0.1
-            f = 880.0
-            samples = (np.sin(2*np.pi*np.arange(fs*duration)*f/fs)).astype(np.float32)
-            beep_stream = p.open(format=pyaudio.paFloat32, channels=1, rate=fs, output=True)
-            beep_stream.write(0.3 * samples)
-            beep_stream.stop_stream()
-            beep_stream.close()
-            p.terminate()
-        except:
-            pass
+            base_dir = r"E:\PythonProjects\OpenAlfred\agent"
+            wake_wav = os.path.join(base_dir, "assets", "sounds", "wake_up.wav")
+            
+            if os.path.exists(wake_wav):
+                with wave.open(wake_wav, "rb") as wf:
+                    p = pyaudio.PyAudio()
+                    stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                                    channels=wf.getnchannels(),
+                                    rate=wf.getframerate(),
+                                    output=True)
+                    data = wf.readframes(1024)
+                    while data:
+                        stream.write(data)
+                        data = wf.readframes(1024)
+                    stream.stop_stream()
+                    stream.close()
+                    p.terminate()
+        except Exception as e:
+            logger.error(f"Error playing wake voice: {e}")
+        finally:
+            self.is_playing_sfx = False
 
         self.in_conversation = True
         self.last_activity_time = time.time()
@@ -117,8 +130,9 @@ class EarService:
                 audio_np = np.frombuffer(data, dtype=np.int16)
 
                 if self.in_conversation:
-                    # Route to LiveKit Agent
-                    self.lk_client.push_audio(audio_np)
+                    # Route to LiveKit Agent (unless we are playing a local SFX)
+                    if not self.is_playing_sfx:
+                        self.lk_client.push_audio(audio_np)
                     
                     # Basic silence timeout logic (optional, Agent usually hangs up)
                     # if time.time() - self.last_activity_time > self.conversation_timeout:
