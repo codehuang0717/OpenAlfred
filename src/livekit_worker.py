@@ -23,7 +23,7 @@ import numpy as np
 from datetime import datetime
 from config import config
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, vad, stt, tts, llm
 from livekit.plugins import silero
 from livekit import rtc
 from tts import get_tts_stream
@@ -45,6 +45,85 @@ logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logger.info("Pre-loading Silero VAD model...")
 GLOBAL_VAD = silero.VAD.load(min_silence_duration=1.0)
 logger.info("Silero VAD model loaded successfully.")
+
+# --- Custom Plugin Wrappers for VoiceAssistant ---
+
+class SenseVoiceSTT(stt.STT):
+    def __init__(self):
+        super().__init__(capabilities=stt.STTCapabilities(streaming=False))
+
+    async def _transcribe(self, buffer: rtc.AudioFrame, language: str = None) -> stt.SpeechEvent:
+        # Re-use existing transcription logic
+        # For non-streaming STT, we buffer and send to HTTP
+        audio_data = b"".join([f.data for f in buffer])
+        text = await transcribe_audio(audio_data, buffer[0].sample_rate, buffer[0].num_channels)
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(text=text, language=language or "zh")]
+        )
+
+class OpenAlfredTTS(tts.TTS):
+    def __init__(self):
+        super().__init__(capabilities=tts.TTSCapabilities(streaming=True))
+
+    def synthesize(self, text: str) -> tts.ChunkedStream:
+        return OpenAlfredTTSStream(text)
+
+class OpenAlfredTTSStream(tts.ChunkedStream):
+    def __init__(self, text: str):
+        super().__init__()
+        self.text = text
+
+    async def _run(self):
+        async for audio_chunk in get_tts_stream(self.text, target_sample_rate=24000):
+            # Convert raw bytes to AudioFrame
+            # VoiceAssistant expects AudioFrames
+            self._event_ch.send_nowait(tts.SynthesizedAudio(
+                frame=rtc.AudioFrame(
+                    data=audio_chunk,
+                    sample_rate=24000,
+                    num_channels=1,
+                    samples_per_channel=len(audio_chunk) // 2
+                )
+            ))
+        self._event_ch.close()
+
+# --- LangGraph LLM Wrapper ---
+
+class LangGraphLLM(llm.LLM):
+    def __init__(self, user_id: str):
+        super().__init__()
+        self.user_id = user_id
+
+    def chat(self, chat_ctx: llm.ChatContext, fnet: llm.FunctionNetwork = None) -> llm.ChatStream:
+        return LangGraphChatStream(chat_ctx, self.user_id)
+
+class LangGraphChatStream(llm.ChatStream):
+    def __init__(self, chat_ctx: llm.ChatContext, user_id: str):
+        super().__init__()
+        self.chat_ctx = chat_ctx
+        self.user_id = user_id
+
+    async def _run(self):
+        # Extract the last user message
+        last_msg = self.chat_ctx.messages[-1]
+        text = last_msg.content
+        session_id = "livekit-session" # Simplified for now
+        
+        # Use existing call_agent logic but adapt to ChatStream events
+        async for event_type, payload in call_agent(session_id, text, self.user_id):
+            if event_type == "message":
+                self._event_ch.send_nowait(llm.ChatChunk(
+                    choices=[llm.Choice(delta=llm.ChoiceDelta(content=payload, role="assistant"))]
+                ))
+            elif event_type == "tool_call":
+                # VoiceAssistant doesn't handle our custom transition audio directly via tool_calls here,
+                # but we can trigger it or let the assistant handle standard tool calls.
+                logger.info(f"LangGraph requested tool: {payload}")
+                
+        self._event_ch.close()
+
+# --- End of LangGraph LLM ---
 
 db_initialized = False
 # Session-level metadata cache to pass info from entrypoint to call_agent
@@ -323,213 +402,13 @@ async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -
 # Removed old text_to_speech function to use streaming src/tts.py
 
 
-async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event):
-    latency_tracker.start("tts_generate")
-    source = rtc.AudioSource(24000, 1)
-    track = rtc.LocalAudioTrack.create_audio_track("tts", source)
-    publication = await room.local_participant.publish_track(track)
-    try:
-        latency_tracker.start("tts_first_chunk")
-        first_chunk_found = False
-        
-        jitter_buffer_bytes = b""
-        jitter_threshold_bytes = int(24000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
-        playback_started = False
-        total_samples_pushed = 0
-        start_time = 0
-
-        async for audio_chunk in get_tts_stream(text, target_sample_rate=24000):
-            if interrupt_event.is_set():
-                logger.info("[VoiceInterrupt] TTS audio playback aborted due to interrupt during stream.")
-                break
-
-            if not first_chunk_found:
-                latency_tracker.end("tts_first_chunk")
-                latency_tracker.end("tts_generate")
-                first_chunk_found = True
-            
-            jitter_buffer_bytes += audio_chunk
-            
-            if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
-                latency_tracker.start("tts_playback")
-                latency_tracker.start("tts_audio_stream")
-                playback_started = True
-                start_time = time.time()
-            
-            if playback_started:
-                audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
-                jitter_buffer_bytes = b"" 
-                
-                chunk_size = 480 
-                for i in range(0, len(audio_np), chunk_size):
-                    if interrupt_event.is_set():
-                        break
-                    chunk = audio_np[i : i + chunk_size]
-                    if len(chunk) > 0:
-                        frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                        await source.capture_frame(frame)
-                        total_samples_pushed += len(chunk)
-                await asyncio.sleep(0.01)
-
-        # Final cleanup for remaining small chunks
-        if jitter_buffer_bytes and not interrupt_event.is_set():
-            if not playback_started:
-                playback_started = True
-                start_time = time.time()
-            audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
-            for i in range(0, len(audio_np), 480):
-                if interrupt_event.is_set():
-                    break
-                chunk = audio_np[i : i + 480]
-                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                await source.capture_frame(frame)
-                total_samples_pushed += len(chunk)
-
-        latency_tracker.end("tts_audio_stream")
-        
-        # Wait for audio to drain
-        if total_samples_pushed > 0 and not interrupt_event.is_set():
-            total_duration = total_samples_pushed / 24000
-            elapsed = time.time() - start_time
-            remaining = total_duration - elapsed
-            if remaining > 0:
-                await asyncio.sleep(remaining + 0.3) 
-        
-        latency_tracker.end("tts_playback")
-    except asyncio.CancelledError:
-        logger.info("[VoiceInterrupt] TTS audio task cancelled gracefully.")
-    finally:
-        await room.local_participant.unpublish_track(publication.sid)
-        if "[TERMINATE]" in text:
-            logger.info("Termination signal detected in Agent response. Hanging up...")
-            should_exit_event.set()
-
-
-async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_event: asyncio.Event = None, user_id: str = "default", call_type: str = "inbound"):
-    """Play the greeting. Prioritize pre-rendered wav if available, otherwise TTS."""
-    
-    # 1. Check for specific pre-rendered wav file first
-    wav_path = None
-    if "outbound-reminder-" in room.name:
-        start_idx = room.name.find("outbound-reminder-") + len("outbound-reminder-")
-        reminder_id = room.name[start_idx : start_idx + 36]
-        specific_wav = os.path.join(AUDIO_CACHE_DIR, f"reminder_{reminder_id}.wav")
-        if os.path.exists(specific_wav):
-            wav_path = specific_wav
-            logger.info(f"Prioritizing specific reminder audio: {wav_path}")
-    elif "outbound-supervisor-" in room.name:
-        # outbound-supervisor-sup_1234567890-userid
-        start_idx = room.name.find("outbound-supervisor-") + len("outbound-supervisor-")
-        # Supervisor ID looks like sup_1234567890 (4 + 10 = 14 chars)
-        # But let's be more flexible and search for the next '-'
-        end_idx = room.name.find("-", start_idx)
-        if end_idx != -1:
-            sup_id = room.name[start_idx : end_idx]
-            specific_wav = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{sup_id}.wav")
-            if os.path.exists(specific_wav):
-                wav_path = specific_wav
-                logger.info(f"Prioritizing pre-generated supervisor audio: {wav_path}")
-    
-    # 2. If wav exists, play it and return
-    if wav_path:
-        if initial_speech:
-            logger.info(f"Playing pre-generated audio for: {initial_speech}")
-            
-        source = rtc.AudioSource(24000, 1)
-        track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
-        publication = await room.local_participant.publish_track(track)
-        try:
-            with wave.open(wav_path, "rb") as wf:
-                framerate = wf.getframerate()
-                audio_data = wf.readframes(wf.getnframes())
-
-            audio_np = np.frombuffer(audio_data, dtype=np.int16)
-            if framerate != 24000:
-                audio_np = np.interp(
-                    np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
-                    np.arange(len(audio_np)),
-                    audio_np,
-                ).astype(np.int16)
-
-            silence = np.zeros(24000 + 12000, dtype=np.int16)
-            chunk_size = 480
-            for i in range(0, len(silence), chunk_size):
-                chunk = silence[i : i + chunk_size]
-                if len(chunk) > 0:
-                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                    await source.capture_frame(frame)
-
-            for i in range(0, len(audio_np), chunk_size):
-                chunk = audio_np[i : i + chunk_size]
-                if len(chunk) > 0:
-                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                    await source.capture_frame(frame)
-            await asyncio.sleep(len(audio_np) / 24000 + 0.5)
-        except Exception as e:
-            logger.error(f"Error in play_greeting (file): {e}")
-        finally:
-            await room.local_participant.unpublish_track(publication.sid)
-        return
-
-    # 3. Fallback: play_tts
-    if initial_speech:
-        logger.info(f"Playing initial speech via TTS: {initial_speech}")
-        dummy_interrupt = asyncio.Event()
-        await play_tts(room, initial_speech, should_exit_event, dummy_interrupt)
-        return
-
-    # 4. Final fallback: default greeting.wav
-    wav_path = str(config.ASSETS_DIR / "greeting.wav")
-    if not os.path.exists(wav_path):
-        return
-
-    source = rtc.AudioSource(24000, 1)
-    track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
-    publication = await room.local_participant.publish_track(track)
-
-    try:
-        with wave.open(wav_path, "rb") as wf:
-            framerate = wf.getframerate()
-            audio_data = wf.readframes(wf.getnframes())
-
-        audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if framerate != 24000:
-            audio_np = np.interp(
-                np.linspace(
-                    0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))
-                ),
-                np.arange(len(audio_np)),
-                audio_np,
-            ).astype(np.int16)
-
-        silence = np.zeros(24000 + 12000, dtype=np.int16)
-        chunk_size = 480
-        for i in range(0, len(silence), chunk_size):
-            chunk = silence[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(
-                    data=chunk.tobytes(),
-                    sample_rate=24000,
-                    num_channels=1,
-                    samples_per_channel=len(chunk),
-                )
-                await source.capture_frame(frame)
-
-        for i in range(0, len(audio_np), chunk_size):
-            chunk = audio_np[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(
-                    data=chunk.tobytes(),
-                    sample_rate=24000,
-                    num_channels=1,
-                    samples_per_channel=len(chunk),
-                )
-                await source.capture_frame(frame)
-        await asyncio.sleep(len(audio_np) / 24000 + 0.5)
+        await lkapi.aclose()
+        await asyncio.sleep(1.0)
     except Exception as e:
-        logger.error(f"Error in play_greeting: {e}")
-    finally:
-        await room.local_participant.unpublish_track(publication.sid)
+        logger.error(f"Definitive hangup logic failed: {e}")
+
+    logger.info("Disconnecting agent from room and closing job...")
+    await room.disconnect()
 
 
 
@@ -683,19 +562,38 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"Call session ready: {unique_session_id} ({call_type})")
 
+    from livekit.agents.voice_assistant import VoiceAssistant
+
+    # Initialize our high-level Assistant
+    assistant = VoiceAssistant(
+        vad=GLOBAL_VAD,
+        stt=SenseVoiceSTT(),
+        llm=LangGraphLLM(user_id=user_id),
+        tts=OpenAlfredTTS(),
+        chat_ctx=llm.ChatContext().append(role="system", text="你是一个友好的语音助手 Alfred。使用简洁自然的口语回复。"),
+    )
+
+    # Start the assistant
+    assistant.start(ctx.room)
+
     if call_type == "outbound":
         logger.info("Outbound call: Waiting for user to answer (physical pick up)...")
         try:
-            # Wait for SIP status or track (with preference for status)
             await asyncio.wait_for(answered_event.wait(), timeout=30)
             logger.info("User picked up! Starting communication...")
+            # Greet the user
+            if initial_speech:
+                await assistant.say(initial_speech, allow_interruptions=True)
         except asyncio.TimeoutError:
             logger.warning("No answer detected within 30s. Terminating.")
             should_exit.set()
             return
     else:
-        # Inbound can trigger greeting immediately
-        asyncio.create_task(trigger_greeting())
+        # Inbound greeting
+        if initial_speech:
+            await assistant.say(initial_speech, allow_interruptions=True)
+        else:
+            await assistant.say("你好！我是 Alfred，请问有什么我可以帮你的？", allow_interruptions=True)
 
     try:
         await should_exit.wait()
@@ -741,203 +639,7 @@ async def entrypoint(ctx: JobContext):
     await room.disconnect()
 
 
-async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, tool_name: str = None):
-    """Play a transition audio file based on the tool called, or a generic fallback."""
-    transition_dir = config.ASSETS_DIR / "transitions"
-    if not transition_dir.exists():
-        logger.info("[Transition] Transition directory missing, skipping.")
-        return
-        
-    wav_path = None
-    if tool_name:
-        specific_path = transition_dir / f"{tool_name}.wav"
-        if specific_path.exists():
-            wav_path = specific_path
-            
-    if not wav_path:
-        generic_files = ["checking.wav", "hmm.wav", "thinking.wav", "wait.wav", "working.wav"]
-        available_generics = [f for f in generic_files if (transition_dir / f).exists()]
-        if available_generics:
-            wav_path = transition_dir / random.choice(available_generics)
-        else:
-            logger.info("[Transition] No valid generic transition audio files found, skipping.")
-            return
-            
-    logger.info(f"[Transition] Selected transition audio: {os.path.basename(wav_path)}")
-    
-    source = rtc.AudioSource(24000, 1)
-    track = rtc.LocalAudioTrack.create_audio_track("transition", source)
-    publication = await room.local_participant.publish_track(track)
-    
-    try:
-        with wave.open(str(wav_path), "rb") as wf:
-            framerate = wf.getframerate()
-            audio_data = wf.readframes(wf.getnframes())
-            
-        audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if framerate != 24000:
-            audio_np = np.interp(
-                np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
-                np.arange(len(audio_np)),
-                audio_np,
-            ).astype(np.int16)
-
-        chunk_size = 480
-        for i in range(0, len(audio_np), chunk_size):
-            if interrupt_event.is_set():
-                logger.info("[VoiceInterrupt] Transition audio playback aborted due to interrupt.")
-                break
-                
-            chunk = audio_np[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(
-                    data=chunk.tobytes(),
-                    sample_rate=24000,
-                    num_channels=1,
-                    samples_per_channel=len(chunk),
-                )
-                await source.capture_frame(frame)
-            await asyncio.sleep(0.01)
-            
-        if not interrupt_event.is_set():
-            await asyncio.sleep(len(audio_np) / 24000 + 0.1)
-            
-    except asyncio.CancelledError:
-        logger.info("[VoiceInterrupt] Transition audio task cancelled.")
-    except Exception as e:
-        logger.error(f"[Transition] Error playing transition audio: {e}")
-    finally:
-        await room.local_participant.unpublish_track(publication.sid)
-
-
-async def process_audio_safe(
-    track: rtc.AudioTrack, room: rtc.Room, should_exit: asyncio.Event, user_id: str
-):
-    audio_stream = rtc.AudioStream(track)
-    vad_stream = GLOBAL_VAD.stream()
-    all_frames = []
-    pre_buffer = collections.deque(maxlen=300)
-    is_speaking = False
-    session_id = room.name
-
-    interrupt_event = asyncio.Event()
-    current_tts_task = None
-    current_transition_task = None
-
-    async def vad_logic():
-        nonlocal is_speaking, all_frames, current_tts_task, current_transition_task
-        async for event in vad_stream:
-            if event.type == vad.VADEventType.START_OF_SPEECH:
-                latency_tracker.start("vad_silence")
-                is_speaking = True
-                
-                logger.info("[VoiceInterrupt] Detected START_OF_SPEECH. Interrupting AI...")
-                interrupt_event.set()
-                if current_tts_task and not current_tts_task.done():
-                    current_tts_task.cancel()
-                if current_transition_task and not current_transition_task.done():
-                    current_transition_task.cancel()
-                    
-                all_frames = list(pre_buffer)
-                pre_buffer.clear()
-            elif event.type == vad.VADEventType.END_OF_SPEECH:
-                latency_tracker.end("vad_silence")
-                latency_tracker.start("vad_speech")
-                latency_tracker.start("end_to_end")
-                is_speaking = False
-                interrupt_event.clear()
-                if all_frames:
-                    audio_data = b"".join([f.data for f in all_frames])
-                    latency_tracker.end("vad_speech")
-                    text = await transcribe_audio(audio_data, 48000, 1)
-                    if text:
-                        logger.info(f"========> [User Said]: {text}")
-                        
-                        # Option A: No immediate random transition audio. Wait for tool call.
-                        
-                        latency_tracker.start("agent_response")
-                        
-                        final_resp_text = ""
-                        async for event_type, payload in call_agent(session_id, text, user_id):
-                            if interrupt_event.is_set():
-                                break
-                                
-                            if event_type == "tool_call":
-                                logger.info(f"[Agent Tool Call]: {payload}")
-                                if current_transition_task and not current_transition_task.done():
-                                    current_transition_task.cancel()
-                                current_transition_task = asyncio.create_task(
-                                    play_transition_audio(room, interrupt_event, tool_name=payload)
-                                )
-                            elif event_type == "message":
-                                final_resp_text = payload
-                                
-                        latency_tracker.end("agent_response")
-                        latency_tracker.end("end_to_end")
-                        logger.info(f"========> [Agent Response]: {final_resp_text}")
-                        
-                        if not interrupt_event.is_set() and final_resp_text:
-                            # User requested: transition words should NOT be interrupted by the final TTS
-                            if current_transition_task and not current_transition_task.done():
-                                logger.info("Waiting for transition audio to finish before playing TTS...")
-                                await current_transition_task
-                                
-                            if not interrupt_event.is_set():
-                                current_tts_task = asyncio.create_task(
-                                    play_tts(room, final_resp_text, should_exit, interrupt_event)
-                                )
-
-                        logger.info("========> [Latency Summary] =========")
-                        logger.info(
-                            f"  VAD沉默检测: {latency_tracker.get('vad_silence') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  VAD语音检测: {latency_tracker.get('vad_speech') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  STT语音识别: {latency_tracker.get('stt_total') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"    - HTTP请求: {latency_tracker.get('stt_http_request') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  LLM总延迟: {latency_tracker.get('llm_total') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"    - 加载历史: {latency_tracker.get('llm_load_history') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"    - 图推理: {latency_tracker.get('llm_graph_invoke') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  TTS首包延迟: {latency_tracker.get('tts_first_chunk') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  TTS生成(全): {latency_tracker.get('tts_generate') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"  TTS播放: {latency_tracker.get('tts_playback') * 1000:.0f}ms"
-                        )
-                        logger.info(
-                            f"    - 音频流: {latency_tracker.get('tts_audio_stream') * 1000:.0f}ms"
-                        )
-                        total = latency_tracker.get("end_to_end")
-                        logger.info(f"  端到端延迟: {total * 1000:.0f}ms")
-                        logger.info("=======================================")
-                        latency_tracker.reset()
-                all_frames = []
-
-    vad_task = asyncio.create_task(vad_logic())
-    try:
-        async for frame_event in audio_stream:
-            vad_stream.push_frame(frame_event.frame)
-            if is_speaking:
-                all_frames.append(frame_event.frame)
-            else:
-                pre_buffer.append(frame_event.frame)
-    finally:
-        vad_task.cancel()
-        await vad_stream.aclose()
+    logger.info(f"Call session ended: {room.name}")
 
 
 if __name__ == "__main__":

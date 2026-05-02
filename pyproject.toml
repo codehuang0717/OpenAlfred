@@ -33,6 +33,9 @@ dependencies = [
     "cryptography>=42.0.5",
     "langchain-community>=0.4.1",
     "tavily-python>=0.7.23",
+    "openwakeword>=0.4.0",
+    "pyaudio>=0.2.14",
+    "onnxruntime>=1.24.4",
 ]
 
 [build-system]
