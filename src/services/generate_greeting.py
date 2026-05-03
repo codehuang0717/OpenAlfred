@@ -3,6 +3,7 @@ import wave
 import io
 import asyncio
 import numpy as np
+from core.config import config
 
 
 async def generate():
@@ -10,7 +11,7 @@ async def generate():
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                "http://127.0.0.1:10096/tts/stream",
+                config.GREETING_TTS_URL,
                 data={"text": "Hello. 你好啊! 老大", "voice": "default"},
             )
             resp.raise_for_status()

@@ -2,10 +2,9 @@
 Reminder repository — CRUD operations for the reminders table.
 """
 
-import aiosqlite
 from typing import Optional
 from datetime import datetime, timezone
-from db.connection import DATABASE_PATH
+from db.connection import get_db
 from utils.logger import get_logger
 from core.event_bus import event_bus, EventType
 
@@ -25,7 +24,7 @@ async def add_reminder(
     user_id: str = "default",
 ):
     created_at = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             """
             INSERT INTO reminders (id, title, subtitle, body, scheduled_at, sent, level, sound, created_at, delivery_method, audio_path, user_id)
@@ -56,8 +55,7 @@ async def add_reminder(
 async def get_pending_reminders():
     now = datetime.now(timezone.utc)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM reminders WHERE sent = 0 ORDER BY scheduled_at ASC"
         ) as cursor:
@@ -78,7 +76,7 @@ async def get_pending_reminders():
 
 async def mark_reminder_sent(id: str) -> bool:
     """Mark a reminder as sent. Returns True if actually updated (idempotent)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "UPDATE reminders SET sent = 1 WHERE id = ? AND sent = 0",
             (id,),
@@ -113,7 +111,7 @@ async def update_reminder(
         return
 
     params.append(id)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
             params,
@@ -127,8 +125,7 @@ async def update_reminder(
 
 
 async def get_all_reminders(user_id: str = "default"):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM reminders WHERE user_id = ? ORDER BY scheduled_at DESC",
             (user_id,),
@@ -138,7 +135,7 @@ async def get_all_reminders(user_id: str = "default"):
 
 
 async def delete_reminder(id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute("DELETE FROM reminders WHERE id = ?", (id,))
         await db.commit()
     
@@ -148,8 +145,7 @@ async def delete_reminder(id: str):
 
 
 async def get_reminder_by_id(id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM reminders WHERE id = ?",
             (id,),

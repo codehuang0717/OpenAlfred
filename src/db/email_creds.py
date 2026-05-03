@@ -2,9 +2,8 @@
 Email credentials repository — encrypted credential storage.
 """
 
-import aiosqlite
 from datetime import datetime, timezone
-from db.connection import DATABASE_PATH
+from db.connection import get_db
 
 
 async def set_email_credentials(
@@ -19,7 +18,7 @@ async def set_email_credentials(
     encrypted_password: str
 ):
     created_at = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             """
             INSERT OR REPLACE INTO email_credentials 
@@ -31,8 +30,7 @@ async def set_email_credentials(
         await db.commit()
 
 async def get_email_credentials(user_id: str) -> list[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM email_credentials WHERE user_id = ?",
             (user_id,)
@@ -41,7 +39,7 @@ async def get_email_credentials(user_id: str) -> list[dict]:
             return [dict(row) for row in rows]
 
 async def delete_email_credentials(account_id: str, user_id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             "DELETE FROM email_credentials WHERE account_id = ? AND user_id = ?",
             (account_id, user_id)

@@ -12,8 +12,10 @@ dotenv.load_dotenv(ENV_PATH, override=True)
 
 class Config:
     """Central configuration for OpenAlfred."""
-    
-    # LLM Settings
+
+    # Paths
+    PROJECT_ROOT = PROJECT_ROOT
+    ASSETS_DIR = PROJECT_ROOT / "assets"
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -29,10 +31,7 @@ class Config:
     
     # Database Settings
     DB_PATH = PROJECT_ROOT / "todos.db"
-    
-    # Asset Settings
-    ASSETS_DIR = PROJECT_ROOT / "assets"
-    
+
     # Local Model Settings
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "gemma4:e2b")
@@ -68,7 +67,22 @@ class Config:
 
     # Browser Control Settings
     CHROME_CDP_URL = os.getenv("CHROME_CDP_URL", "http://localhost:9222")
+    CHROME_USER_DATA_DIR = os.getenv(
+        "CHROME_USER_DATA_DIR",
+        str(PROJECT_ROOT / "agent_chrome_profile")
+    )
 
+    # SenseVoice STT Settings
+    SENSEVOICE_STT_URL = os.getenv("SENSEVOICE_STT_URL", "http://127.0.0.1:8000/extract_text")
+
+    # Screenpipe Settings (eye tool)
+    SCREENPIPE_URL = os.getenv("SCREENPIPE_URL", "http://localhost:3030")
+
+    # Greeting TTS Settings
+    GREETING_TTS_URL = os.getenv("GREETING_TTS_URL", "http://127.0.0.1:10096/tts/stream")
+
+    # Local LiveKit WS (for ear service)
+    LIVEKIT_WS_URL = os.getenv("LIVEKIT_WS_URL", "ws://localhost:7880")
 
     # Supervisor Settings
     SUPERVISOR_INTERVAL = int(os.getenv("SUPERVISOR_INTERVAL", "600")) # 10 minutes

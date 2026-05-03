@@ -12,8 +12,13 @@ os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 
 async def init_db():
-    """Create all tables and run migrations."""
+    """Create all tables, run migrations, and enable WAL mode."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Enable WAL mode for concurrent read/write and set busy timeout
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA foreign_keys=ON")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS todos (
                 id TEXT PRIMARY KEY,
@@ -157,3 +162,20 @@ async def init_db():
         """)
 
         await db.commit()
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def get_db() -> aiosqlite.Connection:
+    """Async context manager: yields a DB connection with recommended PRAGMAs."""
+    db = await aiosqlite.connect(DATABASE_PATH)
+    db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA busy_timeout=5000")
+    await db.execute("PRAGMA foreign_keys=ON")
+    await db.execute("PRAGMA synchronous=NORMAL")
+    try:
+        yield db
+    finally:
+        await db.close()

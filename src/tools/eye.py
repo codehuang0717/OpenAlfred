@@ -2,10 +2,9 @@ import httpx
 from utils.logger import get_logger
 from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
+from core.config import config
 
 logger = get_logger("eye-tool")
-
-SCREENPIPE_URL = "http://localhost:3030"
 
 from rich.console import Console
 from rich.panel import Panel
@@ -28,7 +27,7 @@ async def get_enhanced_context(minutes: int = 10) -> str:
                 "content_type": "all", # Fetch OCR, Audio, and Input
                 "start_time": start_time_str
             }
-            resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
+            resp = await client.get(f"{config.SCREENPIPE_URL}/search", params=params, timeout=10.0)
             
             if resp.status_code != 200:
                 logger.error(f"Screenpipe Search Error: {resp.status_code}")
@@ -70,7 +69,7 @@ async def get_enhanced_context(minutes: int = 10) -> str:
             # 3. Fetch Activity Summary (if available)
             activity_summary = ""
             try:
-                summary_resp = await client.get(f"{SCREENPIPE_URL}/activity/get-activity-summary", timeout=5.0)
+                summary_resp = await client.get(f"{config.SCREENPIPE_URL}/activity/get-activity-summary", timeout=5.0)
                 if summary_resp.status_code == 200:
                     activity_data = summary_resp.json()
                     # activity_data format depends on version, usually it's a list of activities
@@ -135,7 +134,7 @@ async def view_screen(mode: Literal["current", "history"] = "current", query: st
                     "limit": 15,
                     "content_type": "all"
                 }
-                resp = await client.get(f"{SCREENPIPE_URL}/search", params=params, timeout=10.0)
+                resp = await client.get(f"{config.SCREENPIPE_URL}/search", params=params, timeout=10.0)
                 if resp.status_code == 200:
                     items = resp.json().get("data", [])
                     if not items: return f"No results found for '{query}'"

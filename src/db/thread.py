@@ -2,13 +2,12 @@
 Thread memory repository — conversation summary persistence.
 """
 
-import aiosqlite
 from datetime import datetime, timezone
-from db.connection import DATABASE_PATH
+from db.connection import get_db
 
 
 async def get_thread_memory(thread_id: str) -> tuple[str, int]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         async with db.execute(
             "SELECT conversation_summary, summarized_count FROM thread_memories WHERE thread_id = ?",
             (thread_id,)
@@ -20,7 +19,7 @@ async def get_thread_memory(thread_id: str) -> tuple[str, int]:
 
 async def set_thread_memory(thread_id: str, summary: str, count: int):
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute("""
             INSERT INTO thread_memories (thread_id, conversation_summary, summarized_count, updated_at)
             VALUES (?, ?, ?, ?)

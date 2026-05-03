@@ -113,9 +113,16 @@ async def entrypoint(ctx: JobContext):
                 if call_type == "local" and not current_initial_speech:
                     current_initial_speech = "我在，请讲。"
                 
-                if call_type == "outbound":
-                    await asyncio.sleep(0.5)
-                await play_greeting(room, current_initial_speech, should_exit, user_id, call_type)
+                # Link with session to prevent timeout
+                session_obj = next(iter(active_sessions.values()), None) if active_sessions else None
+                if session_obj and hasattr(session_obj, 'is_greeting_playing'):
+                    session_obj.is_greeting_playing = True
+                
+                try:
+                    await play_greeting(room, current_initial_speech, should_exit, user_id, call_type)
+                finally:
+                    if session_obj and hasattr(session_obj, 'is_greeting_playing'):
+                        session_obj.is_greeting_playing = False
             except Exception as e:
                 logger.error(f"Error in trigger_greeting: {e}")
 
@@ -161,13 +168,12 @@ async def entrypoint(ctx: JobContext):
                 return
 
             is_sip = participant.identity.startswith("sip_")
-            session = VoiceSession(room, should_exit, user_id, is_sip=is_sip)
+            session = VoiceSession(room, should_exit, user_id, is_sip=is_sip, answered_event=answered_event)
             task = asyncio.create_task(session.run(track))
-            active_sessions[participant.identity] = task
+            active_sessions[participant.identity] = session # Store the session object
             
             def on_task_done(t):
-                if active_sessions.get(participant.identity) == t:
-                    active_sessions.pop(participant.identity, None)
+                active_sessions.pop(participant.identity, None)
             task.add_done_callback(on_task_done)
             
             if call_type in ("inbound", "local") or not participant.identity.startswith("sip_"):

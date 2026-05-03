@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import logging
 import pyaudio
 import numpy as np
@@ -7,6 +8,7 @@ import os
 import wave
 from .wakeword import WakeWordService
 from .local_livekit_client import LocalLiveKitClient
+from core.config import config
 
 logger = logging.getLogger("ear-service")
 
@@ -28,13 +30,15 @@ class EarService:
         self.CHUNK = 1280 # 80ms chunks
 
         # LiveKit Integration
-        self.lk_client = LocalLiveKitClient(url="ws://localhost:7880")
+        self.lk_client = LocalLiveKitClient(url=config.LIVEKIT_WS_URL)
         self.lk_client.on_disconnect = self.exit_conversation_mode
         self.in_conversation = False
         self.is_playing_sfx = False # Flag to avoid pushing mic data during local playback
         self.last_activity_time = 0
         self.last_exit_time = 0.0 # Cooldown to avoid accidental re-wake
         self.conversation_timeout = 10.0 # Auto-hangup after 10s of silence
+        self._audio_buffer = collections.deque()
+        self._audio_buffer_max_frames = 100
 
     async def start(self, on_detect_callback=None):
         """Start listening for wake words."""
@@ -69,35 +73,30 @@ class EarService:
         
         asyncio.create_task(self._listen_loop())
 
-    async def enter_conversation_mode(self):
-        """Switch from wake-word detection to active LiveKit conversation."""
-        if self.in_conversation:
-            return
-            
-        logger.info("*** WAKE WORD DETECTED: Entering conversation mode ***")
-        
+    def _play_sfx(self):
+        """Play wake-up SFX synchronously (designed for run_in_executor).
+        Returns sfx_end_time for diagnostics."""
         self.is_playing_sfx = True
-        # 1. Play a quick immediate "ding" for instant feedback
         try:
-            p = pyaudio.PyAudio()
-            fs = 44100
-            duration = 0.1
-            f = 880.0
-            samples = (np.sin(2*np.pi*np.arange(fs*duration)*f/fs)).astype(np.float32)
-            beep_stream = p.open(format=pyaudio.paFloat32, channels=1, rate=fs, output=True)
-            beep_stream.write(0.3 * samples)
-            beep_stream.stop_stream()
-            beep_stream.close()
-            p.terminate()
-        except:
-            pass
+            # 1. Play a quick immediate "ding" for instant feedback
+            try:
+                p = pyaudio.PyAudio()
+                fs = 44100
+                duration = 0.1
+                f = 880.0
+                samples = (np.sin(2*np.pi*np.arange(fs*duration)*f/fs)).astype(np.float32)
+                beep_stream = p.open(format=pyaudio.paFloat32, channels=1, rate=fs, output=True)
+                beep_stream.write(0.3 * samples)
+                beep_stream.stop_stream()
+                beep_stream.close()
+                p.terminate()
+            except:
+                pass
 
-        # 2. Wait a bit then play the voice
-        try:
-            time.sleep(0.3) # Brief pause for natural feel
-            base_dir = r"E:\PythonProjects\OpenAlfred\agent"
-            wake_wav = os.path.join(base_dir, "assets", "sounds", "wake_up.wav")
-            
+            # 2. Wait a bit then play the voice
+            time.sleep(0.3)
+            wake_wav = os.path.join(str(config.PROJECT_ROOT), "assets", "sounds", "wake_up.wav")
+
             if os.path.exists(wake_wav):
                 with wave.open(wake_wav, "rb") as wf:
                     p = pyaudio.PyAudio()
@@ -116,13 +115,41 @@ class EarService:
             logger.error(f"Error playing wake voice: {e}")
         finally:
             self.is_playing_sfx = False
+        return time.time()
 
+    async def enter_conversation_mode(self):
+        """Switch from wake-word detection to active LiveKit conversation."""
+        if self.in_conversation:
+            return
+
+        logger.info("*** WAKE WORD DETECTED: Entering conversation mode ***")
+
+        # Set in_conversation early so _listen_loop routes audio to
+        # conversation branch (where it gets buffered during the gap)
         self.in_conversation = True
         self.last_activity_time = time.time()
-        
-        # Room name: local-{timestamp}
+
+        # Start LiveKit connection in background (runs while SFX plays)
         room_name = f"local-user-{int(time.time())}"
-        await self.lk_client.connect(room_name=room_name)
+        connect_task = asyncio.create_task(self.lk_client.connect(room_name=room_name))
+
+        # Play SFX without blocking the event loop
+        loop = asyncio.get_event_loop()
+        sfx_end_time = await loop.run_in_executor(None, self._play_sfx)
+
+        # Wait for LiveKit connection to complete
+        await connect_task
+
+        # Flush buffered audio frames that arrived during the gap
+        # (after SFX ended but before LiveKit was connected)
+        gap_ms = (time.time() - sfx_end_time) * 1000
+        buffered_count = len(self._audio_buffer)
+        if buffered_count > 0:
+            logger.info(f"Connection gap was {gap_ms:.0f}ms, buffered {buffered_count} audio frames")
+            while self._audio_buffer:
+                frame = self._audio_buffer.popleft()
+                self.lk_client.push_audio(frame)
+        self._audio_buffer.clear()
 
     async def exit_conversation_mode(self):
         """Switch back to wake-word detection."""
@@ -131,6 +158,7 @@ class EarService:
             
         logger.info("Exiting conversation mode, returning to wake-word detection.")
         await self.lk_client.disconnect()
+        self._audio_buffer.clear()
         self.in_conversation = False
         self.last_exit_time = time.time() # Start cooldown
         if self.wakeword_service.model:
@@ -146,8 +174,16 @@ class EarService:
                 audio_np = np.frombuffer(data, dtype=np.int16)
 
                 if self.in_conversation:
-                    # Route to LiveKit Agent (unless we are playing a local SFX)
-                    if not self.is_playing_sfx:
+                    if self.is_playing_sfx:
+                        # Skip our own SFX playback audio
+                        pass
+                    elif not self.lk_client.is_connected:
+                        # Gap: SFX done but LiveKit not yet connected — buffer audio
+                        if len(self._audio_buffer) >= self._audio_buffer_max_frames:
+                            self._audio_buffer.popleft()
+                        self._audio_buffer.append(audio_np)
+                    else:
+                        # Connected — push directly to LiveKit
                         self.lk_client.push_audio(audio_np)
                     
                     # Basic silence timeout logic (optional, Agent usually hangs up)

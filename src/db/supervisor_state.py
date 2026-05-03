@@ -2,15 +2,13 @@
 Supervisor state repository — distraction tracking persistence.
 """
 
-import aiosqlite
 from typing import Optional
 from datetime import datetime, timezone
-from db.connection import DATABASE_PATH
+from db.connection import get_db
 
 
 async def get_supervisor_state(user_id: str = "default") -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM supervisor_sessions WHERE user_id = ?",
             (user_id,)
@@ -27,7 +25,7 @@ async def update_supervisor_state(
     last_decision: Optional[str] = None
 ):
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         # 1. Try to update existing session
         query_update = """
             UPDATE supervisor_sessions SET
@@ -64,7 +62,7 @@ async def update_supervisor_state(
 
 async def reset_supervisor_state(user_id: str):
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute("""
             UPDATE supervisor_sessions SET
                 is_distracted = 0,

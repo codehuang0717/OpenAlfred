@@ -2,6 +2,7 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from routers.auth import get_current_user
+from core.config import config
 
 router = APIRouter(prefix="/api", tags=["multimodal"])
 logger = logging.getLogger("multimodal-router")
@@ -14,7 +15,7 @@ async def transcribe_audio_api(file: UploadFile = File(...), user: dict = Depend
         async with httpx.AsyncClient() as client:
             files = {"file": (file.filename, content, file.content_type)}
             resp = await client.post(
-                "http://127.0.0.1:8000/extract_text", files=files, timeout=30.0
+                config.SENSEVOICE_STT_URL, files=files, timeout=30.0
             )
             if resp.status_code == 200:
                 result = resp.json()

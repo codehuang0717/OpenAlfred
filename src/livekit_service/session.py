@@ -16,19 +16,22 @@ logger = get_logger("livekit-session")
 VAD_MODEL = silero.VAD.load(min_silence_duration=1.0)
 
 class VoiceSession:
-    def __init__(self, room: rtc.Room, should_exit: asyncio.Event, user_id: str, is_sip: bool = False):
+    def __init__(self, room: rtc.Room, should_exit: asyncio.Event, user_id: str, is_sip: bool = False, answered_event: asyncio.Event = None):
         self.room = room
         self.should_exit = should_exit
         self.user_id = user_id
         self.is_sip = is_sip
+        self.answered_event = answered_event or asyncio.Event()
+        if not is_sip: # Non-SIP (Web) is always "answered"
+            self.answered_event.set()
         self.session_id = room.name
         
         self.interrupt_event = asyncio.Event()
         self.current_tts_task = None
         self.current_transition_task = None
         self.last_activity_time = time.time()
-        self.SILENCE_TIMEOUT = 10.0
-        
+        self.SILENCE_TIMEOUT = 25.0 # Standard conversation timeout
+        self.is_greeting_playing = False # New flag to track initial greeting
         self.is_speaking = False
         self.is_agent_processing = False
         self.all_frames = []
@@ -43,17 +46,23 @@ class VoiceSession:
         
         try:
             async for frame_event in audio_stream:
-                # Update activity if agent is busy
-                if (self.current_tts_task and not self.current_tts_task.done()) or \
-                   (self.current_transition_task and not self.current_transition_task.done()) or \
-                   self.is_agent_processing or self.is_speaking:
+                # Elegant state-aware timeout check
+                if self.answered_event.is_set():
+                    # Only check for silence if we're not busy and the call is active
+                    is_busy = (self.current_tts_task and not self.current_tts_task.done()) or \
+                              (self.current_transition_task and not self.current_transition_task.done()) or \
+                              self.is_agent_processing or self.is_speaking or self.is_greeting_playing
+                    
+                    if is_busy:
+                        self.last_activity_time = time.time()
+                    
+                    if time.time() - self.last_activity_time > self.SILENCE_TIMEOUT:
+                        logger.info(f"Session Timeout: {self.SILENCE_TIMEOUT}s of total silence in active call. Hanging up {self.session_id}...")
+                        self.should_exit.set()
+                        break
+                else:
+                    # While waiting for answer, we just keep the activity time fresh
                     self.last_activity_time = time.time()
-
-                # Check for silence timeout
-                if time.time() - self.last_activity_time > self.SILENCE_TIMEOUT:
-                    logger.info(f"DEBUG-TIMEOUT: 10s silence detected. Hanging up session {self.session_id}...")
-                    self.should_exit.set()
-                    break
 
                 self.vad_stream.push_frame(frame_event.frame)
                 if self.is_speaking:
@@ -74,6 +83,7 @@ class VoiceSession:
 
     def _handle_start_of_speech(self):
         self.last_activity_time = time.time()
+        self.user_has_spoken = True
         latency_tracker.start("vad_silence")
         self.is_speaking = True
         

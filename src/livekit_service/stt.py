@@ -3,6 +3,7 @@ import wave
 import httpx
 from utils.logger import get_logger
 from utils.latency import latency_tracker
+from core.config import config
 
 logger = get_logger("livekit-stt")
 
@@ -22,7 +23,7 @@ async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -
         async with httpx.AsyncClient() as client:
             files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
             resp = await client.post(
-                "http://127.0.0.1:8000/extract_text", files=files, timeout=15.0
+                config.SENSEVOICE_STT_URL, files=files, timeout=15.0
             )
             resp.raise_for_status()
             latency_tracker.end("stt_http_request")

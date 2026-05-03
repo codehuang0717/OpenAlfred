@@ -2,17 +2,15 @@
 Todo repository — CRUD operations for the todos table.
 """
 
-import aiosqlite
 from typing import Optional
 from datetime import datetime, timezone
 from logic.schema import TodoDict
-from db.connection import DATABASE_PATH
+from db.connection import get_db
 from core.event_bus import event_bus, EventType
 
 
 async def get_all_todos(user_id: str = "default") -> list[TodoDict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM todos WHERE deleted = 0 AND user_id = ? ORDER BY created_at DESC",
             (user_id,),
@@ -33,7 +31,7 @@ async def add_todo(
     user_id: str = "default",
 ):
     created_at = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             """
             INSERT INTO todos (id, title, description, emoji, status, created_at, completed_at, deleted, notes, expected_completion_at, scheduled_start_at, user_id)
@@ -105,7 +103,7 @@ async def update_todo(
         return
 
     params.append(id)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             f"UPDATE todos SET {', '.join(updates)} WHERE id = ?",
             params,
@@ -124,7 +122,7 @@ async def update_todo(
 
 
 async def delete_todo(id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             "UPDATE todos SET deleted = 1 WHERE id = ?",
             (id,),
@@ -136,8 +134,7 @@ async def delete_todo(id: str):
 
 
 async def get_todo_by_id(id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute(
             "SELECT * FROM todos WHERE id = ? AND deleted = 0",
             (id,),
@@ -149,8 +146,7 @@ async def get_todo_by_id(id: str):
 async def get_pending_todo_notifications():
     """Scan todos that are scheduled to start but haven't sent a notification."""
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         # Find todos where scheduled_start_at <= now and notification_sent = 0
         async with db.execute(
             "SELECT * FROM todos WHERE status = 'pending' AND deleted = 0 AND notification_sent = 0 AND scheduled_start_at IS NOT NULL AND scheduled_start_at <= ?",
@@ -162,7 +158,7 @@ async def get_pending_todo_notifications():
 
 async def mark_todo_notification_sent(id: str) -> bool:
     """Mark a todo notification as sent. Returns True if actually updated (idempotent)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "UPDATE todos SET notification_sent = 1 WHERE id = ? AND notification_sent = 0",
             (id,),

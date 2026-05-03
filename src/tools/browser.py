@@ -18,8 +18,11 @@ def get_chrome_path():
     chrome_paths = [
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        r"C:\Users\12611\AppData\Local\Google\Chrome\Application\chrome.exe"
     ]
+    # Also check the current user's local AppData
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        chrome_paths.append(os.path.join(local_appdata, r"Google\Chrome\Application\chrome.exe"))
     for path in chrome_paths:
         if os.path.exists(path):
             return path
@@ -41,7 +44,7 @@ async def web_browser_task(runtime: ToolRuntime, task_description: str) -> Comma
 
     # 3. Launch Chrome manually using subprocess.Popen
     # This avoids the 'NotImplementedError' from asyncio.create_subprocess_exec on some Windows event loops
-    profile_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "agent_chrome_profile")
+    profile_dir = config.CHROME_USER_DATA_DIR
     os.makedirs(profile_dir, exist_ok=True)
     
     port = 9222

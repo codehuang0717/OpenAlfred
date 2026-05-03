@@ -4,6 +4,7 @@ import numpy as np
 import asyncio
 from typing import Optional, Callable
 from openwakeword.model import Model
+from core.config import config
 
 logger = logging.getLogger("ear-wakeword")
 
@@ -38,11 +39,8 @@ class WakeWordService:
             all_paths = get_pretrained_model_paths()
             model_paths = [p for p in all_paths if any(m in os.path.basename(p) for m in self.models)]
 
-            # 2. Check local assets directory
-            # __file__ is agent/src/body/windows_system/ear/wakeword.py
-            # 5 levels up to reach agent/
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-            local_models_dir = os.path.join(base_dir, "assets", "models")
+            # 2. Check local assets directory (via config)
+            local_models_dir = os.path.join(str(config.PROJECT_ROOT), "assets", "models")
             
             logger.info(f"Checking local models directory: {local_models_dir}")
             if os.path.exists(local_models_dir):
