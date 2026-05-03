@@ -1,0 +1,7 @@
+model_name: alfred_v2
+target_phrases:
+  - "alfred"
+custom_samples_dir: ./custom_samples/alfred
+steps: 20000
+n_samples: 10000
+output_dir: ./output/alfred_v2

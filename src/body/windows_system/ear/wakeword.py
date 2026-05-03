@@ -15,7 +15,7 @@ class WakeWordService:
     def __init__(self, wakeword_models: Optional[list] = None, inference_framework: str = "onnx"):
         # Default to 'hey_jarvis' if no models provided
         if not wakeword_models:
-            wakeword_models = ["hey_jarvis"]
+            wakeword_models = ["alfred_fast"]
         
         self.models = wakeword_models
         self.inference_framework = inference_framework
@@ -33,19 +33,44 @@ class WakeWordService:
         logger.info(f"Initializing openWakeWord model for: {self.models}")
         try:
             from openwakeword import get_pretrained_model_paths
-            # Get all paths and filter for the ones we want
+            
+            # 1. Get library pre-trained paths
             all_paths = get_pretrained_model_paths()
             model_paths = [p for p in all_paths if any(m in os.path.basename(p) for m in self.models)]
+
+            # 2. Check local assets directory
+            # __file__ is agent/src/body/windows_system/ear/wakeword.py
+            # 5 levels up to reach agent/
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+            local_models_dir = os.path.join(base_dir, "assets", "models")
             
+            logger.info(f"Checking local models directory: {local_models_dir}")
+            if os.path.exists(local_models_dir):
+                for f in os.listdir(local_models_dir):
+                    if f.endswith((".onnx", ".tflite")):
+                        # Normalize names for comparison (remove underscores and convert to lowercase)
+                        name_no_ext = os.path.splitext(f)[0].lower().replace("_", "")
+                        for m in self.models:
+                            target_name = m.lower().replace("_", "")
+                            if target_name in name_no_ext:
+                                full_path = os.path.join(local_models_dir, f)
+                                if full_path not in model_paths:
+                                    logger.info(f"Found custom model: {full_path}")
+                                    model_paths.append(full_path)
+            else:
+                logger.warning(f"Local models directory not found: {local_models_dir}")
+
             if not model_paths:
-                logger.warning(f"No pre-trained models found matching {self.models}. Using all defaults.")
+                logger.warning(f"No models found matching {self.models} in library or {local_models_dir}")
                 model_paths = []
 
+            # Initialize Model. Note: Some versions of openwakeword don't support inference_framework argument
+            # or hardcode ONNX. We'll pass model_paths and hope for the best.
             self.model = Model(
                 wakeword_model_paths=model_paths
             )
             self._is_initialized = True
-            logger.info("WakeWord model initialized successfully.")
+            logger.info(f"WakeWord model initialized successfully with {len(model_paths)} models.")
         except Exception as e:
             logger.error(f"Failed to initialize WakeWord model: {e}")
             raise
@@ -72,10 +97,17 @@ class WakeWordService:
         if current_time - self._last_detection_time < self._cooldown_seconds:
             return
 
+        # Debug: Print max score periodically or if it's significant
+        max_score = 0
+        if predictions:
+            max_score = max(predictions.values())
+            if max_score > 0.1: # Only print if there's some activity
+                 logger.debug(f"Current max wake-word score: {max_score:.3f}")
+
         for mdl_name, score in predictions.items():
-            if score > 0.5: # Confidence threshold
+            if score > 0.32: # Lowered threshold for personalized model
                 self._last_detection_time = current_time # Start cooldown
-                logger.info(f"Wake word detected: {mdl_name} (score: {score:.2f})")
+                logger.info(f"*** WAKE WORD DETECTED: {mdl_name} (score: {score:.3f}) ***")
                 if self._on_detect_callback:
                     self._on_detect_callback(mdl_name, score)
                 # Reset model internals

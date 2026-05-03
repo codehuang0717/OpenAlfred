@@ -178,7 +178,7 @@ class EarService:
         logger.info("Ear service stopped.")
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     
     def on_wake(name, score):
         print(f"\a*** WAKE WORD DETECTED: {name} ({score:.2f}) ***")
