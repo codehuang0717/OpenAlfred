@@ -61,9 +61,10 @@ async def agent_node(state: AgentState, config):
     is_voice = metadata.get("type") == "call"
     
     if is_voice:
-        # Exclude browser task for voice to avoid accidental/unstable triggers
-        selected_tools = [t for t in ALL_TOOLS if t.name != "web_browser_task"]
-        logger.info(f"[AgentNode] Voice call detected. Binding {len(selected_tools)} tools (excluded browser).")
+        # Slim tool set for lower latency: exclude browser, outbound call, and UI-oriented email tools
+        voice_exclude = {"web_browser_task", "make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"}
+        selected_tools = [t for t in ALL_TOOLS if t.name not in voice_exclude]
+        logger.info(f"[AgentNode] Voice call detected. Binding {len(selected_tools)}/{len(ALL_TOOLS)} tools (excluded: {voice_exclude}).")
     else:
         selected_tools = list(ALL_TOOLS)
         logger.info(f"[AgentNode] Text chat detected. Binding all {len(selected_tools)} tools.")
