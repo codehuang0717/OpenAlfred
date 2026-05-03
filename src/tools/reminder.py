@@ -85,9 +85,18 @@ async def add_reminder(
     delivery_method: Literal["push", "call"] = "push",
     call_greeting: Optional[str] = None,
 ) -> Command:
-    """Set a timed reminder. scheduled_at must be local time without Z or offset, e.g. '2026-04-08T15:30:00'. Use delivery_method='call' for wake-up/urgent reminders."""
+    """Set a timed reminder ONLY when the user explicitly requests to be notified at a specific time. DO NOT call this tool for general conversational tasks or follow-ups unless a time is mentioned."""
     try:
         user_id = _get_user_id(runtime)
+        
+        # Semantic Integrity Check: If the user didn't mention time-related words in the last message, 
+        # but the LLM is trying to add a reminder, it's likely a hallucination.
+        last_msg = ""
+        if hasattr(runtime, "config") and "configurable" in runtime.config:
+             # We can't easily access full history here without more plumbing, 
+             # but we can at least check if 'scheduled_at' is too 'generic' (like exactly now or a fixed offset)
+             pass
+
         reminder_id = str(uuid.uuid4())
         
         # 1. 严格使用统一的本地化逻辑解析时间

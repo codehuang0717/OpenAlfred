@@ -141,7 +141,40 @@ async def read_email(
         )
 
 
+@tool
+async def get_email_accounts(runtime: ToolRuntime) -> Command:
+    """Get a list of all configured email accounts and their account_ids."""
+    user_id = await _get_user_id(runtime)
+    try:
+        from core.database import get_email_credentials
+        creds = await get_email_credentials(user_id)
+        accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
+        
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=json.dumps(accounts),
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ]
+            }
+        )
+    except Exception as e:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=f"Error fetching accounts: {str(e)}",
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ]
+            }
+        )
+
+
 email_tools = [
     get_recent_emails,
     read_email,
+    get_email_accounts,
 ]

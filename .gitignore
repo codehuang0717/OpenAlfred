@@ -1,23 +1,24 @@
 .env
-.idea/agent.iml
-.idea/misc.xml
-.langgraph_api/.langgraph_checkpoint.1.pckl
-.langgraph_api/.langgraph_checkpoint.2.pckl
-.langgraph_api/.langgraph_checkpoint.3.pckl
-.langgraph_api/.langgraph_ops.pckl
-.langgraph_api/.langgraph_retry_counter.pckl
-.langgraph_api/store.pckl
-.langgraph_api/store.vectors.pckl
-.idea/agent.iml
-src/__pycache__
-src/OpenAlfred.egg-info
-src/tools/__pycache__
-assets
-src/utils/__pycache__/
-tests/test_supervisor.py
+.idea/
+.venv/
+.vscode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# LangGraph persistence
+.langgraph_api/
+
+# Local data & assets
+assets/
 agent_chrome_profile/
-src/routers/__pycache__/
-src/db/__pycache__/
 src/body/windows_system/eye/data/
-src/livekit_service/__pycache__/
-src/body/windows_system/ear/__pycache__/
+logs/
+
+# Testing
+tests/test_supervisor.py
