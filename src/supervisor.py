@@ -18,7 +18,7 @@ if sys.platform == "win32":
 # Add src to python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from database import (
+from core.database import (
     init_db, 
     get_all_todos, 
     get_active_user, 
@@ -28,14 +28,14 @@ from database import (
     get_setting,
     AUDIO_CACHE_DIR
 )
-from tts import save_tts_to_file
+from services.tts import save_tts_to_file
 from tools.eye import get_recent_ocr_text
 from utils.time_utils import utc_to_local, parse_to_aware_utc
 from tools.call_user import dial_user
-from llm import get_model
-from prompts import SUPERVISOR_PROMPT
+from services.llm import get_model
+from logic.prompts import SUPERVISOR_PROMPT
 from langchain_core.messages import HumanMessage
-from config import config
+from core.config import config
 from rich.console import Console
 from rich.panel import Panel
 
@@ -292,14 +292,14 @@ class ProactiveSupervisor:
             logger.error(f"Error in supervision logic: {e}")
 
     async def _listen_for_wakeups(self, wakeup_event: asyncio.Event):
-        from event_bus import event_bus, EventType
+        from core.event_bus import event_bus, EventType
         async for event in event_bus.subscribe(EventType.SUPERVISOR_WAKEUP.value):
             logger.info("Supervisor received wakeup event!")
             wakeup_event.set()
 
     async def start(self):
         await init_db()
-        from event_bus import event_bus
+        from core.event_bus import event_bus
         await event_bus.connect()
         logger.info(f"Supervisor Service Initialized. Interval: {config.SUPERVISOR_INTERVAL}s")
         

@@ -1,9 +1,0 @@
-model_name: alfred_v3
-target_phrases:
-  - "alfred"
-custom_samples_dir: ./custom_samples/alfred
-augmentation:
-  rounds: 5  # 增加增强轮数，让你的声音衍生出更多变体
-steps: 40000  # 增加步数，让它学得更扎实
-n_samples: 15000  # 增加合成样本基础量
-output_dir: ./output/alfred_v3

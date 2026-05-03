@@ -4,8 +4,8 @@ import dotenv
 from pathlib import Path
 
 # Load environment variables
-# Find project root (assuming src is inside agent folder)
-PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+# Find project root (assuming src/core is inside agent folder)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 ENV_PATH = PROJECT_ROOT / ".env"
 
 dotenv.load_dotenv(ENV_PATH, override=True)

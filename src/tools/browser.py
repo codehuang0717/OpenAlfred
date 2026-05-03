@@ -2,8 +2,8 @@ from langchain.tools import tool, ToolRuntime
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 from browser_use import Agent, Browser, ChatOpenAI
-from llm import get_model
-from config import config
+from services.llm import get_model
+from core.config import config
 import logging
 import asyncio
 

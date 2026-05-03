@@ -1,8 +1,0 @@
-model_name: alfred_fast
-target_phrases: ["alfred"]
-custom_samples_dir: ./custom_samples/alfred
-n_samples: 2000
-steps: 5000
-augmentation:
-  rounds: 1
-output_dir: ./output/alfred_fast

@@ -2,8 +2,8 @@ import asyncio
 from utils.logger import get_logger
 import httpx
 from datetime import datetime, timezone
-from config import config
-from database import (
+from core.config import config
+from core.database import (
     get_pending_reminders,
     mark_reminder_sent,
     get_pending_todo_notifications,
@@ -11,7 +11,7 @@ from database import (
     get_reminder_by_id,
     get_todo_by_id,
 )
-from notification_service import notification_service
+from services.notification import notification_service
 
 logger = get_logger("scheduler")
 

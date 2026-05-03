@@ -2,7 +2,7 @@
 from utils.logger import get_logger
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
-from config import config
+from core.config import config
 
 logger = get_logger("llm_factory")
 

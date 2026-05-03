@@ -1,4 +1,4 @@
-from config import config
+from core.config import config
 from langchain.tools import tool, ToolRuntime
 from mem0 import MemoryClient
 

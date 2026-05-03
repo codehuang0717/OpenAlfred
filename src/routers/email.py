@@ -4,12 +4,12 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from database import (
+from core.database import (
     get_email_credentials,
     set_email_credentials,
     delete_email_credentials,
 )
-from email_service import verify_account, EmailServiceException
+from services.email import verify_account, EmailServiceException
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["email"])
@@ -34,7 +34,7 @@ class EmailSendRequest(BaseModel):
 @router.get("/emails/recent")
 async def get_recent_emails_api(user: dict = Depends(get_current_user)):
     """Get recent emails from configured accounts."""
-    from email_service import get_recent_emails, EmailServiceException
+    from services.email import get_recent_emails, EmailServiceException
     try:
         emails = await get_recent_emails(user_id=user["id"], limit=15)
         return emails
@@ -47,7 +47,7 @@ async def get_recent_emails_api(user: dict = Depends(get_current_user)):
 @router.get("/emails/{email_id}")
 async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get_current_user)):
     """Get a specific email's content."""
-    from email_service import read_email, EmailServiceException
+    from services.email import read_email, EmailServiceException
     try:
         email_data = await read_email(user_id=user["id"], email_id=email_id, account_id=account_id)
         return email_data
@@ -60,7 +60,7 @@ async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get
 @router.post("/emails/send")
 async def send_email_api(req: EmailSendRequest, user: dict = Depends(get_current_user)):
     """Send an email."""
-    from email_service import draft_and_send_email, EmailServiceException
+    from services.email import draft_and_send_email, EmailServiceException
     try:
         await draft_and_send_email(
             user_id=user["id"],

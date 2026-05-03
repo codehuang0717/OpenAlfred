@@ -2,7 +2,7 @@
 OpenAlfred — Backward-compatible re-export layer.
 
 All database functions have been refactored into the `db/` package.
-This file re-exports everything so that existing `from database import xxx`
+This file re-exports everything so that existing `from core.database import xxx`
 statements continue to work without modification.
 """
 

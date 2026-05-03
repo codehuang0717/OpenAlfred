@@ -2,7 +2,7 @@ import uuid
 import time
 import httpx
 import json
-from config import config
+from core.config import config
 from utils.logger import get_logger
 from utils.latency import latency_tracker
 from utils.auth_utils import mint_service_jwt
@@ -94,7 +94,7 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
     input_messages.append({"role": "user", "content": text})
 
     try:
-        from database import get_setting
+        from core.database import get_setting
         global_model_selection = await get_setting("model_selection", "gpt-cloud")
     except Exception:
         global_model_selection = "gpt-cloud"

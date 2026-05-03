@@ -5,9 +5,9 @@ Todo repository — CRUD operations for the todos table.
 import aiosqlite
 from typing import Optional
 from datetime import datetime, timezone
-from schema import TodoDict
+from logic.schema import TodoDict
 from db.connection import DATABASE_PATH
-from event_bus import event_bus, EventType
+from core.event_bus import event_bus, EventType
 
 
 async def get_all_todos(user_id: str = "default") -> list[TodoDict]:

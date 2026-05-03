@@ -10,8 +10,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import init_db
-from event_bus import event_bus
+from core.database import init_db
+from core.event_bus import event_bus
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events
 
 from utils.logger import setup_logging, get_logger

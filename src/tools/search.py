@@ -1,6 +1,6 @@
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain.tools import tool
-from config import config
+from core.config import config
 import os
 
 # Ensure API key is in environment for the underlying tool

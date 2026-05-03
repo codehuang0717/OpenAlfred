@@ -2,7 +2,7 @@
 OpenAlfred Database Package — Domain-specific repository modules.
 
 All functions are re-exported here for convenience.
-Legacy code can continue using `from database import xxx`.
+Legacy code can continue using `from core.database import xxx`.
 """
 
 from db.connection import DATABASE_PATH, AUDIO_CACHE_DIR, init_db

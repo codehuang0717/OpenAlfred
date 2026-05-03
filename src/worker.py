@@ -6,14 +6,14 @@ import os
 # Add src to python path if necessary
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from scheduler import (
+from services.scheduler import (
     check_and_send_pending_reminders, 
     check_and_send_todo_notifications,
     send_single_reminder,
     send_single_todo_notification
 )
-from database import init_db
-from event_bus import event_bus, EventType
+from core.database import init_db
+from core.event_bus import event_bus, EventType
 
 from utils.logger import setup_logging, get_logger
 

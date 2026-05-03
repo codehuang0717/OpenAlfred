@@ -10,8 +10,8 @@ from langchain.tools import ToolRuntime
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 
-from config import config
-from database import get_active_user
+from core.config import config
+from core.database import get_active_user
 
 logger = logging.getLogger("call-user-tool")
 

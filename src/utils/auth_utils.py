@@ -1,6 +1,6 @@
 import time
 import jwt as pyjwt
-from config import config
+from core.config import config
 
 def mint_service_jwt(user_id: str) -> str:
     """Mint a short-lived JWT for the voice worker to call LangGraph Server.

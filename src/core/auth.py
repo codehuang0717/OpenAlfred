@@ -10,7 +10,7 @@ Integrates with LangGraph Server's built-in auth system to:
 import jwt
 from utils.logger import get_logger
 from langgraph_sdk import Auth
-from config import config
+from core.config import config
 
 logger = get_logger("auth")
 

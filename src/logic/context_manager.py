@@ -21,11 +21,11 @@ from langchain_core.messages import (
     BaseMessage,
     RemoveMessage,
 )
-from config import config
+from core.config import config
 
 logger = logging.getLogger("context-manager")
 
-from prompts import (
+from logic.prompts import (
     SUMMARY_PROMPT,
     KNOWLEDGE_EXTRACTION_PROMPT,
     TITLE_GENERATION_PROMPT,

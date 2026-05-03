@@ -5,11 +5,11 @@ import wave
 import random
 import numpy as np
 from livekit import rtc
-from config import config
+from core.config import config
 from utils.logger import get_logger
 from utils.latency import latency_tracker
-from tts import get_tts_stream
-from database import AUDIO_CACHE_DIR
+from services.tts import get_tts_stream
+from core.database import AUDIO_CACHE_DIR
 
 logger = get_logger("livekit-audio")
 

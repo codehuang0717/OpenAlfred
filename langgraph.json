@@ -4,10 +4,10 @@
     "src"
   ],
   "graphs": {
-    "agent": "./src/main.py:graph"
+    "agent": "./src/logic/agent.py:graph"
   },
   "auth": {
-    "path": "./src/auth.py:auth"
+    "path": "./src/core/auth.py:auth"
   },
   "env": ".env"
 }

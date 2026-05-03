@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 import sys
-from config import config
+from core.config import config
 
 # Force local mode if --local flag is present
 if "--local" in sys.argv:
@@ -22,7 +22,7 @@ if "--local" in sys.argv:
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit import rtc
-from database import init_db
+from core.database import init_db
 from utils.logger import setup_logging, get_logger
 
 # Import decoupled components
@@ -84,7 +84,7 @@ async def entrypoint(ctx: JobContext):
     else:
         # Inbound
         try:
-            from database import get_user_by_username
+            from core.database import get_user_by_username
             fp_user = await get_user_by_username("FlyingPig")
             if fp_user:
                 user_id = fp_user["id"]

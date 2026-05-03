@@ -5,9 +5,9 @@ from pydantic import BaseModel
 from langchain.tools import ToolRuntime, tool
 from langchain.messages import ToolMessage
 from langgraph.types import Command
-from schema import AgentState, TodoDict
+from logic.schema import AgentState, TodoDict
 from utils.time_utils import localize_to_utc
-from database import (
+from core.database import (
     get_all_todos,
     get_active_user,
     add_todo as db_add_todo,

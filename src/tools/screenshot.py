@@ -4,7 +4,7 @@ import logging
 from PIL import ImageGrab
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
-from llm import get_model
+from services.llm import get_model
 
 logger = logging.getLogger("tools.screenshot")
 

@@ -5,10 +5,10 @@ from langgraph.types import Command
 import json
 
 # Local imports
-from email_service import get_recent_emails as _get_recent_emails
-from email_service import read_email as _read_email
-from email_service import draft_and_send_email as _draft_and_send_email
-from email_service import EmailServiceException
+from services.email import get_recent_emails as _get_recent_emails
+from services.email import read_email as _read_email
+from services.email import draft_and_send_email as _draft_and_send_email
+from services.email import EmailServiceException
 from tools.todos import _get_user_id
 
 @tool
@@ -22,7 +22,7 @@ async def get_recent_emails(
     Returns subject, sender, date, email ID, and available account info."""
     user_id = await _get_user_id(runtime)
     try:
-        from database import get_email_credentials
+        from core.database import get_email_credentials
         creds = await get_email_credentials(user_id)
         accounts = [{"account_id": c["account_id"], "email": c["email_address"], "provider": c["provider"]} for c in creds]
         

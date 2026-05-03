@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import (
+from core.database import (
     get_all_todos,
     update_todo as db_update_todo,
     delete_todo as db_delete_todo,

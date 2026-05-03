@@ -6,11 +6,11 @@ from typing import Literal
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 
-from schema import AgentState
-from llm import get_model
-from prompts import AGENT_SYSTEM_PROMPT
-from database import get_thread_memory, set_thread_memory
-from context_manager import ContextManager
+from logic.schema import AgentState
+from services.llm import get_model
+from logic.prompts import AGENT_SYSTEM_PROMPT
+from core.database import get_thread_memory, set_thread_memory
+from logic.context_manager import ContextManager
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()

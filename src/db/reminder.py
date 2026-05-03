@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime, timezone
 from db.connection import DATABASE_PATH
 from utils.logger import get_logger
-from event_bus import event_bus, EventType
+from core.event_bus import event_bus, EventType
 
 _logger = get_logger("db.reminder")
 

@@ -7,7 +7,7 @@ import wave
 import io
 import os
 from typing import AsyncGenerator
-from config import config
+from core.config import config
 
 logger = logging.getLogger("tts-client")
 

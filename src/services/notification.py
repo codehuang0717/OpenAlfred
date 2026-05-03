@@ -1,7 +1,7 @@
 import httpx
 from utils.logger import get_logger
 from typing import Optional, Literal
-from config import config
+from core.config import config
 
 logger = get_logger("notification_service")
 
@@ -96,7 +96,7 @@ class NotificationService:
         level = "timeSensitive"
         
         # Link back to the web app (assuming local dev for now, can be configured)
-        # We can use a base URL from config if available
+        # We can use a base URL from core.config if available
         url = "http://localhost:3000" # Placeholder, ideally deep link to the todo
         
         return await cls.send_bark_notification(

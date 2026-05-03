@@ -5,7 +5,7 @@ from email.header import decode_header
 from email.utils import parsedate_to_datetime
 import aioimaplib
 import aiosmtplib
-from database import get_email_credentials
+from core.database import get_email_credentials
 from utils.crypto import decrypt_password
 
 class EmailServiceException(Exception):

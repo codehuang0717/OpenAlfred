@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-from config import config
-from context_manager import ContextManager
+from core.config import config
+from logic.context_manager import ContextManager
 ctx_manager = ContextManager()
 from routers.auth import get_current_user, security
 
@@ -250,7 +250,7 @@ async def generate_thread_title(
         return {"title": "新对话"}
 
     try:
-        from llm import get_model
+        from services.llm import get_model
         from langchain_core.messages import HumanMessage
 
         title_prompt = ctx_manager.build_title_prompt(first_user_msg)

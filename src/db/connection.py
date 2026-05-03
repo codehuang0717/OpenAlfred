@@ -4,7 +4,7 @@ Database connection management and schema initialization.
 
 import aiosqlite
 import os
-from config import config
+from core.config import config
 
 DATABASE_PATH = str(config.DB_PATH)
 AUDIO_CACHE_DIR = str(config.ASSETS_DIR / "audio_cache")

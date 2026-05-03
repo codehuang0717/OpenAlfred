@@ -9,12 +9,12 @@ import os
 import wave
 import asyncio
 from zoneinfo import ZoneInfo
-from config import config
-from tts import save_tts_to_file
+from core.config import config
+from services.tts import save_tts_to_file
 
 # Import DB and utils functions
 from utils.time_utils import localize_to_utc
-from database import (
+from core.database import (
     add_reminder as db_add_reminder,
     get_all_reminders,
     delete_reminder as db_delete_reminder,

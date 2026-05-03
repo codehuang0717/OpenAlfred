@@ -4,7 +4,7 @@ import time
 from livekit import rtc
 import pyaudio
 import numpy as np
-from config import config
+from core.config import config
 
 logger = logging.getLogger("ear-livekit-client")
 

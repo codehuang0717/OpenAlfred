@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from config import config
+from core.config import config
 
 def localize_to_utc(time_str: str) -> str:
     """

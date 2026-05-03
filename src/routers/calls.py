@@ -2,7 +2,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 
-from config import config
+from core.config import config
 from routers.auth import get_current_user, security
 from routers.threads import _lg_headers
 

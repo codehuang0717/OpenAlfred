@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_setting, set_setting
+from core.database import get_setting, set_setting
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -20,7 +20,7 @@ class SupervisorConfigRequest(BaseModel):
 @router.get("/models")
 async def get_models():
     """Get list of available LLM models."""
-    from config import config
+    from core.config import config
     return [
         {
             "id": "gpt-cloud",
@@ -86,7 +86,7 @@ async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = 
     # Update legacy setting for compatibility
     await set_setting("supervisor_enabled", str(data.smart_supervision_enabled).lower())
 
-    from event_bus import event_bus, EventType
+    from core.event_bus import event_bus, EventType
     await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
 
     return {

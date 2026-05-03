@@ -1,5 +1,5 @@
 from cryptography.fernet import Fernet
-from config import config
+from core.config import config
 
 def get_fernet() -> Fernet:
     key = config.EMAIL_ENCRYPTION_KEY

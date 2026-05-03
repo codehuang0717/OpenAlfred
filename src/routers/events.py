@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from routers.auth import get_current_user
-from event_bus import event_bus
+from core.event_bus import event_bus
 from utils.logger import get_logger
 
 logger = get_logger("router.events")

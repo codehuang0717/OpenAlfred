@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import (
+from core.database import (
     get_all_reminders,
     update_reminder as db_update_reminder,
     delete_reminder as db_delete_reminder,

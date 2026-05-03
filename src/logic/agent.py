@@ -10,9 +10,9 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
-from schema import AgentState
-from llm import get_model
-from nodes import load_context_node, agent_node, summarize_node
+from logic.schema import AgentState
+from services.llm import get_model
+from logic.nodes import load_context_node, agent_node, summarize_node
 
 logger = logging.getLogger("chat-agent")
 
