@@ -136,8 +136,9 @@ class LocalLiveKitClient:
                         output=True
                     )
                 
-                # Convert memoryview to bytes for PyAudio
-                self.output_stream.write(bytes(frame.data))
+                # Convert memoryview to bytes for PyAudio (run in executor to avoid blocking event loop)
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.output_stream.write, bytes(frame.data))
         except Exception as e:
             logger.error(f"Error during audio playback for {track_sid}: {e}")
         finally:

@@ -13,7 +13,7 @@ from .audio_playback import play_tts, play_transition_audio
 logger = get_logger("livekit-session")
 
 # Pre-load VAD model as a class or module level variable
-VAD_MODEL = silero.VAD.load(min_silence_duration=1.0)
+VAD_MODEL = silero.VAD.load(min_silence_duration=0.5)
 
 class VoiceSession:
     def __init__(self, room: rtc.Room, should_exit: asyncio.Event, user_id: str, is_sip: bool = False, answered_event: asyncio.Event = None):
@@ -103,22 +103,22 @@ class VoiceSession:
         latency_tracker.start("end_to_end")
         self.is_speaking = False
         self.interrupt_event.clear()
-        
+
         if not self.all_frames:
             return
-            
+
         audio_data = b"".join([f.data for f in self.all_frames])
         self.all_frames = []
         latency_tracker.end("vad_speech")
-        
+
         # 1. Transcribe
         text = await transcribe_audio(audio_data, 48000, 1)
         if not text:
             return
-            
+
         logger.info(f"========> [User Said]: {text}")
         latency_tracker.start("agent_response")
-        
+
         # 2. Call Agent
         final_resp_text = ""
         self.is_agent_processing = True
@@ -126,7 +126,7 @@ class VoiceSession:
             async for event_type, payload in call_agent(self.session_id, text, self.user_id):
                 if self.interrupt_event.is_set():
                     break
-                    
+
                 if event_type == "tool_call":
                     logger.info(f"[Agent Tool Call]: {payload}")
                     if self.current_transition_task and not self.current_transition_task.done():
@@ -138,10 +138,10 @@ class VoiceSession:
                     final_resp_text = payload
         finally:
             self.is_agent_processing = False
-        
+
         latency_tracker.end("agent_response")
         latency_tracker.end("end_to_end")
-        
+
         # 3. Play TTS
         if not self.interrupt_event.is_set() and final_resp_text:
             logger.info(f"========> [Agent Response]: {final_resp_text}")
@@ -149,7 +149,7 @@ class VoiceSession:
             if self.current_transition_task and not self.current_transition_task.done():
                 logger.info("Waiting for transition audio to finish before playing TTS...")
                 await self.current_transition_task
-                
+
             if not self.interrupt_event.is_set():
                 self.current_tts_task = asyncio.create_task(
                     play_tts(self.room, final_resp_text, self.should_exit, self.interrupt_event)

@@ -161,7 +161,7 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                                                         name = tc.get("name")
                                                         if name:
                                                             yield "tool_call", name
-                                                
+
                                                 content = last_msg.get("content", "")
                                                 if isinstance(content, list):
                                                     content = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)

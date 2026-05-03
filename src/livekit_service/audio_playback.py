@@ -23,9 +23,9 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
     try:
         latency_tracker.start("tts_first_chunk")
         first_chunk_found = False
-        
+
         jitter_buffer_bytes = b""
-        jitter_threshold_bytes = int(24000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2) 
+        jitter_threshold_bytes = int(24000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2)
         playback_started = False
         total_samples_pushed = 0
         start_time = 0
@@ -39,20 +39,20 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 latency_tracker.end("tts_first_chunk")
                 latency_tracker.end("tts_generate")
                 first_chunk_found = True
-            
+
             jitter_buffer_bytes += audio_chunk
-            
+
             if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
                 playback_started = True
                 start_time = time.time()
-            
+
             if playback_started:
                 audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
-                jitter_buffer_bytes = b"" 
-                
-                chunk_size = 480 
+                jitter_buffer_bytes = b""
+
+                chunk_size = 480
                 for i in range(0, len(audio_np), chunk_size):
                     if interrupt_event.is_set():
                         break
@@ -78,15 +78,15 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 total_samples_pushed += len(chunk)
 
         latency_tracker.end("tts_audio_stream")
-        
+
         # Wait for audio to drain
         if total_samples_pushed > 0 and not interrupt_event.is_set():
             total_duration = total_samples_pushed / 24000
             elapsed = time.time() - start_time
             remaining = total_duration - elapsed
             if remaining > 0:
-                await asyncio.sleep(remaining + 0.3) 
-        
+                await asyncio.sleep(remaining + 0.3)
+
         latency_tracker.end("tts_playback")
     except asyncio.CancelledError:
         logger.info("[VoiceInterrupt] TTS audio task cancelled gracefully.")
