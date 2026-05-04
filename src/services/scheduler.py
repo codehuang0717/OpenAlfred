@@ -44,9 +44,11 @@ async def check_and_send_pending_reminders():
             logger.info(f"Sending reminder: {r['body']} via {r['delivery_method']}")
             
             if r.get("delivery_method") == "call":
+                # Pass empty phone_number to let dial_user auto-resolve
+                # from the user's sip_extension in the DB
                 status = await dial_user(
-                    phone_number="100", 
-                    initial_speech=r['body'], 
+                    phone_number="",
+                    initial_speech=r['body'],
                     user_id=r.get("user_id", "default"),
                     reminder_id=r['id']
                 )
@@ -89,9 +91,11 @@ async def send_single_reminder(reminder_id: str):
         logger.info(f"Triggering individual reminder: {r['body']} via {r['delivery_method']}")
         
         if r.get("delivery_method") == "call":
+            # Pass empty phone_number to let dial_user auto-resolve
+            # from the user's sip_extension in the DB
             status = await dial_user(
-                phone_number="100", 
-                initial_speech=r['body'], 
+                phone_number="",
+                initial_speech=r['body'],
                 user_id=r.get("user_id", "default"),
                 reminder_id=r['id']
             )
@@ -104,7 +108,7 @@ async def send_single_reminder(reminder_id: str):
                 level=r.get('level', 'active'),
                 sound=r.get('sound')
             )
-        
+
         await mark_reminder_sent(r["id"])
     except Exception as e:
         logger.error(f"Error in send_single_reminder for {reminder_id}: {e}", exc_info=True)

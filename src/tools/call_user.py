@@ -110,16 +110,19 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
     except Exception as e:
         logger.warning(f"Failed to pre-create call thread: {e}")
 
+    # Auto-resolve the user's SIP extension if no explicit number given
+    target_number = phone_number or await _resolve_phone_number(user_id)
+
     # Step 2: Dial
     jwt_token = generate_sip_token()
     sip_headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
-    
+
     api_url = config.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
     url = f"{api_url.rstrip('/')}/twirp/livekit.SIP/CreateSIPParticipant"
 
     dial_data = {
         "sip_trunk_id": OUTBOUND_TRUNK_ID,
-        "sipCallTo": phone_number,
+        "sipCallTo": target_number,
         "roomName": room_name,
         "participantIdentity": "agent_caller",
         "participantName": "Alfred Supervisor",
@@ -129,7 +132,7 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, headers=sip_headers, json=dial_data, timeout=10.0)
             if resp.status_code == 200:
-                return f"呼叫已发起 ({phone_number})"
+                return f"呼叫已发起 ({target_number})"
             return f"呼叫失败: {resp.text}"
     except Exception as e:
         return f"系统异常: {str(e)}"

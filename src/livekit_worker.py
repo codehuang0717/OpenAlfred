@@ -221,6 +221,7 @@ async def entrypoint(ctx: JobContext):
 
     # ── State ──────────────────────────────────────────────────────
     answered_event = asyncio.Event()
+    greeting_event = asyncio.Event()  # outbound: only set on callTag (real answer)
     greeting_played = False
     greeting_lock = asyncio.Lock()
     active_sessions: dict = {}
@@ -286,11 +287,24 @@ async def entrypoint(ctx: JobContext):
 
     @room.on("participant_attributes_changed")
     def on_attributes_changed(changed_attributes: dict, participant: rtc.RemoteParticipant):
-        if "sip.callStatus" in changed_attributes:
-            if participant.attributes.get("sip.callStatus") == "active":
-                logger.info(f"[sip] call active from {participant.identity}")
+        logger.info(
+            f"[sip-attrs] participant={participant.identity} "
+            f"changed={json.dumps(changed_attributes, ensure_ascii=False, default=str)}"
+        )
+        # For outbound calls: sip.callStatus may become "active" due to
+        # trunk/Asterisk early-answer BEFORE the human picks up. The true
+        # user-answer signal is sip.callTag appearing — this is the far-end
+        # UAS To-tag generated in the final 200 OK when the callee answers.
+        if call_type == "outbound" and "sip.callTag" in changed_attributes:
+            logger.info(f"[sip] USER ANSWERED (callTag): {participant.attributes.get('sip.callTag')}")
+            greeting_event.set()
+        elif "sip.callStatus" in changed_attributes:
+            new_status = participant.attributes.get("sip.callStatus")
+            logger.info(f"[sip] callStatus={new_status} from {participant.identity}")
+            if new_status == "active":
                 answered_event.set()
-                asyncio.create_task(trigger_greeting())
+                if call_type in ("inbound", "local"):
+                    asyncio.create_task(trigger_greeting())
 
     @room.on("participant_disconnected")
     def on_participant_disconnected(p):
@@ -311,30 +325,45 @@ async def entrypoint(ctx: JobContext):
                 active_sessions.pop(participant.identity, None)
             task.add_done_callback(on_task_done)
 
-            if call_type in ("inbound", "local") or not participant.identity.startswith("sip_"):
+            if call_type in ("inbound", "local"):
                 answered_event.set()
                 asyncio.create_task(trigger_greeting())
+            # outbound: do NOT set answered_event here.
+            # We must wait for sip.callStatus to become "active"
+            # via on_attributes_changed. Otherwise greeting plays
+            # while the phone is still ringing.
 
     # ── Initial scan (for participants already in the room) ────────
     for participant in room.remote_participants.values():
         if call_type == "inbound":
-            # Resolve user FIRST, then subscribe + greet
             asyncio.create_task(_on_inbound_participant(participant))
         else:
             asyncio.create_task(subscribe_to_audio(participant))
 
+        # Log full participant state on initial scan
+        logger.info(
+            f"[sip-scan] participant={participant.identity} "
+            f"attrs={json.dumps(dict(participant.attributes), ensure_ascii=False, default=str)}"
+        )
+
         if participant.attributes.get("sip.callStatus") == "active":
             answered_event.set()
-            if call_type != "inbound":
-                # For inbound, greeting triggers after user resolution
+            if call_type == "local":
                 asyncio.create_task(trigger_greeting())
 
     if call_type == "outbound":
+        # For outbound, ONLY sip.callTag (far-end UAS answer) triggers
+        # greeting. sip.callStatus="active" is the trunk answer and is
+        # deliberately ignored for outbound.
         try:
-            await asyncio.wait_for(answered_event.wait(), timeout=30)
+            await asyncio.wait_for(greeting_event.wait(), timeout=30)
         except asyncio.TimeoutError:
+            logger.warning("[outbound] greeting_event timed out after 30s")
             should_exit.set()
             return
+        logger.info("[outbound] greeting_event set, playing greeting")
+        await asyncio.sleep(0.3)
+        await trigger_greeting()
     else:
         asyncio.create_task(trigger_greeting())
 
