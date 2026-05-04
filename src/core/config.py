@@ -20,8 +20,15 @@ class Config:
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
     
-    # Memory Settings
+    # Memory System (Two-Level: L1 local .md + L2 Mem0 semantic)
     MEM0_API_KEY = os.getenv("MEM0_API_KEY")
+    MEMORY_DIR = PROJECT_ROOT.parent / "memory"  # repo root / memory/
+    MEM0_ENABLED = os.getenv("MEM0_ENABLED", "true").lower() == "true"
+    L1_MAX_TOKENS_PER_FILE = int(os.getenv("L1_MAX_TOKENS", "300"))
+    L1_MAX_TOTAL_TOKENS = int(os.getenv("L1_MAX_TOTAL_TOKENS", "1200"))
+    CONSOLIDATION_INTERVAL_HOURS = int(os.getenv("CONSOLIDATION_INTERVAL_HOURS", "24"))
+    EXTRACTION_INTERVAL = int(os.getenv("EXTRACTION_INTERVAL", "3"))  # only extract every N turns
+    EXTRACTION_MIN_MSG_LENGTH = int(os.getenv("EXTRACTION_MIN_MSG_LENGTH", "8"))  # skip short msgs
     
     # LiveKit Settings
     LIVEKIT_URL = os.getenv("LIVEKIT_URL")

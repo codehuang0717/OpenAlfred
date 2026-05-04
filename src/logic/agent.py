@@ -12,21 +12,21 @@ from langgraph.prebuilt import ToolNode
 
 from logic.schema import AgentState
 from services.llm import get_model
-from logic.nodes import load_context_node, agent_node, summarize_node
+from logic.nodes import load_context_node, agent_node, summarize_node, extract_knowledge_node
 
 logger = logging.getLogger("chat-agent")
 
 # ─── Graph Logic ──────────────────────────────────────────────────────────
 
-def should_continue(state: AgentState) -> Literal["tools", "summarize"]:
+def should_continue(state: AgentState) -> Literal["tools", "extract_knowledge"]:
     """
-    Route to tools if the last message has tool calls, otherwise summarize.
+    Route to tools if the last message has tool calls, otherwise extract_knowledge.
     """
     messages = state.messages
     last_message = messages[-1]
     if last_message.tool_calls:
         return "tools"
-    return "summarize"
+    return "extract_knowledge"
 
 # ─── Graph Construction ───────────────────────────────────────────────────
 
@@ -49,8 +49,9 @@ def call_model(state: AgentState, config):
 workflow = StateGraph(AgentState)
 
 workflow.add_node("load_context", load_context_node)
-workflow.add_node("agent", agent_node) # We'll update nodes.py to handle the bound model or pass it
+workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tool_node)
+workflow.add_node("extract_knowledge", extract_knowledge_node)
 workflow.add_node("summarize", summarize_node)
 
 workflow.set_entry_point("load_context")
@@ -61,11 +62,12 @@ workflow.add_conditional_edges(
     should_continue,
     {
         "tools": "tools",
-        "summarize": "summarize"
+        "extract_knowledge": "extract_knowledge"
     }
 )
 
 workflow.add_edge("tools", "agent")
+workflow.add_edge("extract_knowledge", "summarize")
 workflow.add_edge("summarize", END)
 
 # Compile the graph

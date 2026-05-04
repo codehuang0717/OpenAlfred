@@ -2,47 +2,71 @@ from utils.logger import get_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Literal
+import json
+import re
+import traceback
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 
 from logic.schema import AgentState
 from services.llm import get_model
-from logic.prompts import AGENT_SYSTEM_PROMPT
+from logic.prompts import AGENT_SYSTEM_PROMPT, KNOWLEDGE_EXTRACTION_PROMPT
 from core.database import get_thread_memory, set_thread_memory
 from logic.context_manager import ContextManager
+from logic.memory_manager import memory_manager
+from core.config import config as app_config
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
 
+def _get_user_id_from_config(config) -> str:
+    """Extract user_id from LangGraph config."""
+    if isinstance(config, dict):
+        conf = config.get("configurable", {})
+        auth_user = conf.get("langgraph_auth_user", {})
+        if isinstance(auth_user, dict) and "identity" in auth_user:
+            return auth_user["identity"]
+        metadata = config.get("metadata", {})
+        if "owner" in metadata:
+            return metadata["owner"]
+        if "thread_owner" in conf:
+            return conf["thread_owner"]
+    return "default"
+
+
 async def load_context_node(state: AgentState, config):
     """
-    Node to inject dynamic context (time, summary) into the message list.
-    Replaces the 'awrap_model_call' logic from middleware.
+    Node to inject dynamic context (time, summary, L1 memories) into the message list.
     """
     # 1. Get current time
     now_uk = datetime.now(ZoneInfo("Europe/London"))
     time_str = now_uk.strftime("%Y-%m-%d %H:%M:%S")
     weekday = now_uk.strftime("%A")
-    
+
     # 2. Get Thread Memory (Summary) from DB if not already in state
     thread_id = config.get("configurable", {}).get("thread_id", "default_thread")
     summary = state.conversation_summary
     summarized_count = state.summarized_count
-    
+
     if not summary:
         summary, summarized_count = await get_thread_memory(thread_id)
-        
+
+    # 3. Load L1 local memories for this user
+    user_id = state.user_id or _get_user_id_from_config(config)
+    l1_memories = memory_manager.build_injection_text(user_id)
+
     context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
+    if l1_memories:
+        context += f"\n\n{l1_memories}"
     if summary:
         context += f"\n\n[对话历史摘要]\n{summary}"
-        
-    # To avoid polluting history with multiple system messages, we store the current 
-    # instruction in a separate state field and prepend it only during the LLM call.
+
     return {
         "system_instruction": f"{AGENT_SYSTEM_PROMPT}\n\n{context}",
         "conversation_summary": summary,
-        "summarized_count": summarized_count
+        "summarized_count": summarized_count,
+        "user_id": user_id,
     }
 
 async def agent_node(state: AgentState, config):
@@ -134,5 +158,115 @@ async def summarize_node(state: AgentState, config):
             await set_thread_memory(thread_id, combined_summary, new_count)
             # Update state so the next turn has the new summary
             return {"conversation_summary": combined_summary, "summarized_count": new_count}
-            
+
     return {}
+
+
+async def extract_knowledge_node(state: AgentState, config):
+    """
+    Post-processing node to extract user facts/preferences from ALL unextracted
+    conversation turns and merge into L1 local memory files.
+
+    Key design:
+    - Accumulates messages since last extraction (no information is lost)
+    - Uses a turn counter to throttle frequency (default: every 3 turns)
+    - Feeds all unextracted turns into a single extraction call (batch extraction)
+    """
+    interval = app_config.EXTRACTION_INTERVAL
+    counter = getattr(state, "extraction_counter", 0) + 1
+
+    # Trigger gate: accumulate turns, only extract every N turns
+    if counter < interval:
+        return {"extraction_counter": counter}
+
+    messages = state.messages
+    if len(messages) < 2:
+        return {"extraction_counter": 0}
+
+    # Collect all user+assistant pairs since last extraction
+    prev_extracted = getattr(state, "extracted_msg_count", 0)
+    unextracted = messages[prev_extracted:]
+
+    # Build conversation transcript from unextracted messages
+    turns: list[str] = []
+    i = 0
+    while i < len(unextracted):
+        m = unextracted[i]
+        if isinstance(m, HumanMessage) and m.content:
+            user_text = str(m.content).strip()
+            if len(user_text) >= app_config.EXTRACTION_MIN_MSG_LENGTH:
+                # Find the next assistant reply (text only, not tool calls)
+                assistant_text = ""
+                for j in range(i + 1, len(unextracted)):
+                    am = unextracted[j]
+                    if isinstance(am, AIMessage) and am.content and not getattr(am, "tool_calls", None):
+                        assistant_text = str(am.content).strip()
+                        break
+                if assistant_text:
+                    turns.append(f"用户：{user_text}\n助手：{assistant_text}")
+            i += 1
+        else:
+            i += 1
+
+    if not turns:
+        return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
+
+    user_id = state.user_id or _get_user_id_from_config(config)
+    conversation_text = "\n---\n".join(turns)
+
+    try:
+        llm = get_model("gpt-cloud")
+        prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(conversation=conversation_text)
+        result = await llm.ainvoke(
+            [HumanMessage(content=prompt)],
+            config={"callbacks": []}
+        )
+        raw_content = result.content
+        if not raw_content:
+            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+        text = raw_content.strip()
+
+        if "```" in text:
+            text = re.sub(r"```\w*", "", text).replace("```", "").strip()
+
+        facts = json.loads(text)
+        if not isinstance(facts, list) or len(facts) == 0:
+            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
+
+        valid_facts = []
+        for f in facts:
+            if isinstance(f, dict) and "fact" in f:
+                valid_facts.append({
+                    "category": f.get("category", "profile"),
+                    "fact": f["fact"],
+                    "importance": f.get("importance", "medium"),
+                })
+
+        if not valid_facts:
+            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
+
+        added = await memory_manager.extract_and_merge(user_id, valid_facts, llm)
+        logger.info(f"Knowledge extraction (counter={counter}, {len(turns)} turns): "
+                     f"{len(valid_facts)} facts found, added to {added} for '{user_id}'")
+
+        if app_config.MEM0_ENABLED:
+            try:
+                from mem0 import MemoryClient
+                mem0 = MemoryClient(api_key=app_config.MEM0_API_KEY)
+                for f in valid_facts:
+                    mem0.add(
+                        messages=[{"role": "user", "content": f['fact']}],
+                        user_id=user_id
+                    )
+                logger.debug(f"L2 Mem0 updated with {len(valid_facts)} facts")
+            except Exception as e:
+                logger.warning(f"L2 Mem0 write failed (non-blocking): {e}")
+
+    except json.JSONDecodeError:
+        logger.debug(f"Failed to parse knowledge extraction JSON. Raw: {text[:200]}")
+    except Exception as e:
+        logger.warning(f"Knowledge extraction failed: {e}\n{traceback.format_exc()}")
+
+    return {"extraction_counter": 0, "extracted_msg_count": len(messages)}

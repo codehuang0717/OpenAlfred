@@ -26,6 +26,8 @@ class AgentState(BaseModel):
     summarized_count: int = 0
     user_id: str = ""
     system_instruction: str = ""
+    extraction_counter: int = 0  # turns since last extraction; triggers when >= interval
+    extracted_msg_count: int = 0  # how many messages have already been extracted
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""
