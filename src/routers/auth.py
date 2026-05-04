@@ -21,7 +21,11 @@ logger = logging.getLogger("auth-router")
 
 
 async def _regenerate_sip_config(db_path: str, output_path: str, ext: str):
-    """Regenerate Asterisk pjsip_users.conf and reload PJSIP module.
+    """Regenerate pjsip_users.conf and reload Asterisk.
+
+    If CLOUD_HOST is set, SCPs the config to the cloud VM and reloads remotely.
+    Otherwise reloads via local docker exec.
+
     Fire-and-forget — errors are logged but never raised to the caller.
     """
     import aiosqlite
@@ -46,11 +50,12 @@ async def _regenerate_sip_config(db_path: str, output_path: str, ext: str):
             cursor = await db.execute(
                 "SELECT sip_extension, sip_password, username FROM users "
                 "WHERE sip_extension != '' AND sip_extension IS NOT NULL "
+                "AND CAST(sip_extension AS INTEGER) > 100 "
                 "ORDER BY CAST(sip_extension AS INTEGER)"
             )
             users = await cursor.fetchall()
 
-        # 2. Write config file
+        # 2. Write config file locally
         _os.makedirs(_os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(HEADER.format(ts=_dt.now(_tz.utc).isoformat()))
@@ -62,20 +67,47 @@ async def _regenerate_sip_config(db_path: str, output_path: str, ext: str):
 
         logger.info(f"[_regenerate_sip_config] wrote {len(users)} endpoints to {output_path}")
 
-        # 3. Reload Asterisk PJSIP module
-        try:
-            result = subprocess.run(
-                ["docker", "exec", "asterisk", "asterisk", "-rx", "pjsip reload"],
-                capture_output=True, text=True, timeout=10,
+        # 3. Push to cloud and reload Asterisk
+        cloud_host = _os.getenv("CLOUD_HOST", "")
+        cloud_dir = _os.getenv("CLOUD_DEPLOY_DIR", "~/cloud_deploy")
+
+        if cloud_host:
+            # ── Remote deployment: scp config + docker exec via ssh ──
+            remote_conf = f"{cloud_dir}/asterisk/pjsip_users.conf"
+            scp_result = subprocess.run(
+                ["scp", output_path, f"{cloud_host}:{remote_conf}"],
+                capture_output=True, text=True, timeout=15,
             )
-            if result.returncode == 0:
-                logger.info(f"[_regenerate_sip_config] Asterisk PJSIP reloaded OK")
+            if scp_result.returncode == 0:
+                logger.info(f"[_regenerate_sip_config] pushed config to {cloud_host}")
             else:
-                logger.warning(f"[_regenerate_sip_config] Asterisk reload rc={result.returncode}: {result.stderr.strip()}")
-        except FileNotFoundError:
-            logger.warning("[_regenerate_sip_config] docker CLI not found, skip reload")
-        except Exception as e:
-            logger.warning(f"[_regenerate_sip_config] docker exec failed: {e}")
+                logger.warning(f"[_regenerate_sip_config] scp failed: {scp_result.stderr.strip()}")
+                return
+
+            reload_result = subprocess.run(
+                ["ssh", cloud_host,
+                 f"cd {cloud_dir} && docker compose exec -T asterisk asterisk -rx 'pjsip reload'"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if reload_result.returncode == 0:
+                logger.info(f"[_regenerate_sip_config] remote Asterisk PJSIP reloaded OK")
+            else:
+                logger.warning(f"[_regenerate_sip_config] remote reload failed: {reload_result.stderr.strip()}")
+        else:
+            # ── Local deployment: docker exec directly ──
+            try:
+                result = subprocess.run(
+                    ["docker", "exec", "asterisk", "asterisk", "-rx", "pjsip reload"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    logger.info(f"[_regenerate_sip_config] local Asterisk PJSIP reloaded OK")
+                else:
+                    logger.warning(f"[_regenerate_sip_config] reload rc={result.returncode}: {result.stderr.strip()}")
+            except FileNotFoundError:
+                logger.warning("[_regenerate_sip_config] docker CLI not found, skip reload")
+            except Exception as e:
+                logger.warning(f"[_regenerate_sip_config] docker exec failed: {e}")
 
     except Exception as e:
         logger.error(f"[_regenerate_sip_config] failed: {e}")
