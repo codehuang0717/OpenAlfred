@@ -118,6 +118,7 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                     "input": {
                         "messages": input_messages,
                         "model_selection": model,
+                        "user_id": user_id,
                     },
                     "stream_mode": ["updates"],
                     "config": {

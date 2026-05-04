@@ -30,8 +30,13 @@ def _get_user_id_from_config(config) -> str:
         metadata = config.get("metadata", {})
         if "owner" in metadata:
             return metadata["owner"]
+        # Voice agent passes "owner" in configurable, not "thread_owner"
+        if "owner" in conf:
+            return conf["owner"]
         if "thread_owner" in conf:
             return conf["thread_owner"]
+        if "user_id" in conf:
+            return conf["user_id"]
     return "default"
 
 

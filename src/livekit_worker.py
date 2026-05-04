@@ -79,17 +79,32 @@ async def entrypoint(ctx: JobContext):
             parts = room.name.split("-")
             user_id = "-".join(parts[1:-1]) if len(parts) >= 3 else "default"
     elif call_type == "local":
-        parts = room.name.split("-")
-        user_id = parts[1] if len(parts) >= 2 else "default"
-    else:
-        # Inbound
+        # Local calls: resolve real user from DB (not from room name)
         try:
-            from core.database import get_user_by_username
-            fp_user = await get_user_by_username("FlyingPig")
-            if fp_user:
-                user_id = fp_user["id"]
+            from core.database import get_active_user
+            active = await get_active_user()
+            if active:
+                user_id = active["id"]
+                logger.info(f"Local call resolved to user: {active.get('username')} ({user_id})")
+            else:
+                user_id = "default"
+                logger.warning("No active user found for local call, using 'default'")
         except Exception as e:
-            logger.error(f"Failed to find inbound user FlyingPig: {e}")
+            logger.error(f"Failed to resolve local call user: {e}")
+            user_id = "default"
+    else:
+        # Inbound: try caller identity first, fall back to active user
+        try:
+            from core.database import get_active_user
+            active = await get_active_user()
+            if active:
+                user_id = active["id"]
+                logger.info(f"Inbound call resolved to active user: {active.get('username')} ({user_id})")
+            else:
+                user_id = "default"
+        except Exception as e:
+            logger.error(f"Failed to resolve inbound user: {e}")
+            user_id = "default"
 
     answered_event = asyncio.Event() 
     greeting_played = False
