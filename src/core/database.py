@@ -33,6 +33,7 @@ from db.reminder import (
 from db.user import (
     create_user,
     get_user_by_username,
+    get_user_by_sip_extension,
     get_user_by_id,
     update_user_last_login,
     get_active_user,

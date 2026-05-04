@@ -134,13 +134,46 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
     except Exception as e:
         return f"系统异常: {str(e)}"
 
+async def _resolve_phone_number(user_id: str) -> str:
+    """Resolve a dialable number for the given user.
+    Returns the user's sip_extension if available, else the supervisor default.
+    """
+    if user_id and user_id != "default":
+        try:
+            from core.database import get_user_by_id
+            user = await get_user_by_id(user_id)
+            if user and user.get("sip_extension"):
+                ext = user["sip_extension"]
+                logger.info(
+                    f"[_resolve_phone_number] user_id={user_id} "
+                    f"-> sip_extension={ext}"
+                )
+                return ext
+        except Exception as e:
+            logger.warning(f"[_resolve_phone_number] lookup failed: {e}")
+    fallback = config.SUPERVISOR_PHONE_NUMBER
+    logger.info(f"[_resolve_phone_number] user_id={user_id} -> fallback={fallback}")
+    return fallback
+
+
 @tool
 async def make_outbound_call(
-    runtime: ToolRuntime, phone_number: str = "100", initial_speech: str = ""
+    runtime: ToolRuntime, phone_number: str = "", initial_speech: str = ""
 ) -> Command:
-    """Make an outbound phone call to the user for urgent reminders or when requested."""
+    """Make an outbound phone call to the user for urgent reminders or when requested.
+
+    Args:
+        phone_number: Target phone/extension. Leave empty to auto-resolve from user profile.
+        initial_speech: What to say when the user picks up.
+    """
     user_id = await _get_user_id(runtime)
-    msg = await dial_user(phone_number, initial_speech, user_id)
+    # Auto-resolve the user's SIP extension if no explicit number given
+    target = phone_number or await _resolve_phone_number(user_id)
+    logger.info(
+        f"[make_outbound_call] user_id={user_id} phone={target} "
+        f"speech={initial_speech[:50]}"
+    )
+    msg = await dial_user(target, initial_speech, user_id)
 
     return Command(
         update={

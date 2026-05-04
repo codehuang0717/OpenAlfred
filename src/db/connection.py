@@ -142,9 +142,18 @@ async def init_db():
                 display_name TEXT DEFAULT '',
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                last_login_at TEXT
+                last_login_at TEXT,
+                sip_extension TEXT DEFAULT '',
+                sip_password TEXT DEFAULT ''
             )
         """)
+
+        # Migration: add sip columns to existing users table
+        for col in ["sip_extension", "sip_password"]:
+            try:
+                await db.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT DEFAULT ''")
+            except Exception:
+                pass
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS email_credentials (

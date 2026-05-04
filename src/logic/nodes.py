@@ -57,8 +57,17 @@ async def load_context_node(state: AgentState, config):
     if not summary:
         summary, summarized_count = await get_thread_memory(thread_id)
 
-    # 3. Load L1 local memories for this user
-    user_id = state.user_id or _get_user_id_from_config(config)
+    # 3. Resolve user_id: always prefer JWT/auth identity over cached state
+    resolved = _get_user_id_from_config(config)
+    if resolved != "default":
+        user_id = resolved
+    else:
+        # Fallback: use state value (e.g. voice calls where auth may not fire)
+        user_id = state.user_id or "default"
+    logger.debug(
+        f"[load_context] user_id={user_id} "
+        f"(resolved={resolved} state_uid={state.user_id})"
+    )
     l1_memories = memory_manager.build_injection_text(user_id)
 
     context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
@@ -216,7 +225,8 @@ async def extract_knowledge_node(state: AgentState, config):
     if not turns:
         return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
-    user_id = state.user_id or _get_user_id_from_config(config)
+    resolved = _get_user_id_from_config(config)
+    user_id = resolved if resolved != "default" else (state.user_id or "default")
     conversation_text = "\n---\n".join(turns)
 
     try:

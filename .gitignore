@@ -22,4 +22,5 @@ logs/
 
 # Testing
 tests/test_supervisor.py
-logs/api.log
+logs/
+src/logic/__pycache__/

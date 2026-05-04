@@ -8,6 +8,7 @@ if not hasattr(sdk_logs, "LogData"):
     sdk_logs.LogData = LogData
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -93,18 +94,22 @@ async def entrypoint(ctx: JobContext):
             logger.error(f"Failed to resolve local call user: {e}")
             user_id = "default"
     else:
-        # Inbound: try caller identity first, fall back to active user
+        # Inbound SIP: try to resolve user from caller extension via DB,
+        # fall back to active user
+        user_id = "default"
         try:
             from core.database import get_active_user
             active = await get_active_user()
             if active:
                 user_id = active["id"]
-                logger.info(f"Inbound call resolved to active user: {active.get('username')} ({user_id})")
+                logger.info(
+                    f"[inbound] initial user_id={user_id} (active: {active.get('username')}) "
+                    f"— will refine when SIP participant connects"
+                )
             else:
-                user_id = "default"
+                logger.warning("[inbound] No active user found, using 'default'")
         except Exception as e:
-            logger.error(f"Failed to resolve inbound user: {e}")
-            user_id = "default"
+            logger.error(f"[inbound] Failed to resolve user: {e}")
 
     answered_event = asyncio.Event() 
     greeting_played = False
@@ -154,6 +159,72 @@ async def entrypoint(ctx: JobContext):
         "unique_session_id": unique_session_id,
     }
 
+    async def _resolve_inbound_user(p: rtc.RemoteParticipant):
+        """Extract SIP caller extension, lookup user, update `user_id`.
+        Called when a SIP participant connects on an inbound call.
+        """
+        nonlocal user_id
+        attrs = dict(p.attributes)
+        logger.info(
+            f"[_resolve_inbound_user] raw attributes: "
+            f"identity={p.identity} sip_from={attrs.get('sip.from', 'N/A')} "
+            f"sip_caller_id={attrs.get('sip.callerId', 'N/A')} "
+            f"sip_to={attrs.get('sip.to', 'N/A')}"
+        )
+
+        # Try multiple sources for the caller extension
+        caller_ext = None
+
+        # 1. sip.callerId — e.g. "101" or "sip:101@..."
+        raw_caller = attrs.get("sip.callerId", "")
+        if raw_caller:
+            # Strip sip: prefix and @domain suffix
+            caller_ext = raw_caller.replace("sip:", "").split("@")[0].strip()
+            logger.info(f"[_resolve_inbound_user] extracted ext={caller_ext} from sip.callerId={raw_caller!r}")
+
+        # 2. sip.from — e.g. "<sip:101@asterisk>"
+        if not caller_ext:
+            raw_from = attrs.get("sip.from", "")
+            if raw_from:
+                # Extract digits between sip: and @
+                import re
+                m = re.search(r"sip:(\d+)@", raw_from)
+                if m:
+                    caller_ext = m.group(1)
+                    logger.info(f"[_resolve_inbound_user] extracted ext={caller_ext} from sip.from={raw_from!r}")
+
+        # 3. participant identity — e.g. "sip_101" or "sip_+441234567890"
+        if not caller_ext and p.identity.startswith("sip_"):
+            identity_num = p.identity[4:]  # strip "sip_" prefix
+            if identity_num.isdigit():
+                caller_ext = identity_num
+                logger.info(f"[_resolve_inbound_user] extracted ext={caller_ext} from identity={p.identity!r}")
+
+        if caller_ext:
+            try:
+                from core.database import get_user_by_sip_extension
+                sip_user = await get_user_by_sip_extension(caller_ext)
+                if sip_user:
+                    old_uid = user_id
+                    user_id = sip_user["id"]
+                    logger.info(
+                        f"[_resolve_inbound_user] RESOLVED: ext={caller_ext} "
+                        f"-> username={sip_user['username']} id={user_id} "
+                        f"(was: {old_uid})"
+                    )
+                else:
+                    logger.warning(
+                        f"[_resolve_inbound_user] extension={caller_ext} NOT IN DB, "
+                        f"keeping user_id={user_id}"
+                    )
+            except Exception as e:
+                logger.error(f"[_resolve_inbound_user] lookup failed: {e}")
+        else:
+            logger.warning(
+                f"[_resolve_inbound_user] could not extract extension from "
+                f"attrs={attrs}, keeping user_id={user_id}"
+            )
+
     async def subscribe_to_audio(p: rtc.RemoteParticipant):
         for pub in p.track_publications.values():
             if pub.kind == rtc.TrackKind.KIND_AUDIO:
@@ -162,6 +233,18 @@ async def entrypoint(ctx: JobContext):
 
     @room.on("participant_connected")
     def on_participant_connected(p: rtc.RemoteParticipant):
+        # Debug: dump ALL SIP attributes for troubleshooting
+        attrs = dict(p.attributes)
+        identity = p.identity
+        logger.info(
+            f"[participant_connected] identity={identity} "
+            f"sip_attrs={json.dumps(attrs, ensure_ascii=False, default=str)}"
+        )
+
+        # Try to resolve user from SIP caller identity (multi-user inbound)
+        if call_type == "inbound":
+            asyncio.create_task(_resolve_inbound_user(p))
+
         asyncio.create_task(subscribe_to_audio(p))
 
     @room.on("participant_attributes_changed")

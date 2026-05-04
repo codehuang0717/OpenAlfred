@@ -9,5 +9,8 @@
   "auth": {
     "path": "./src/core/auth.py:auth"
   },
-  "env": ".env"
+  "env": ".env",
+  "watch": {
+    "exclude": ["cloud_deploy/**"]
+  }
 }
