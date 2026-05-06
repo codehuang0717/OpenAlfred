@@ -20,14 +20,13 @@ class AgentState(BaseModel):
     """State for the text-based chat agent."""
     messages: Annotated[list, add_messages] = []
     todos: list[TodoDict] = []
-    mem0_user_id: str = "default"
     model_selection: Optional[str] = "gpt-cloud"
     conversation_summary: str = ""
     summarized_count: int = 0
     user_id: str = ""
     system_instruction: str = ""
-    extraction_counter: int = 0  # turns since last extraction; triggers when >= interval
-    extracted_msg_count: int = 0  # how many messages have already been extracted
+    extraction_counter: int = 0
+    extracted_msg_count: int = 0
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""

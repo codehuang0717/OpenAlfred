@@ -292,58 +292,6 @@ class ProactiveSupervisor:
         except Exception as e:
             logger.error(f"Error in supervision logic: {e}")
 
-        # ── Memory Consolidation (L2 → L1) ─────────────────────────
-        await self._maybe_consolidate_memories(user_id)
-
-    async def _maybe_consolidate_memories(self, user_id: str):
-        """Check if L2→L1 consolidation is due and execute if needed."""
-        try:
-            last_consolidation = await get_setting(f"last_consolidation_{user_id}")
-            now_ts = datetime.now(timezone.utc).timestamp()
-
-            if last_consolidation:
-                last_ts = float(last_consolidation)
-                hours_since = (now_ts - last_ts) / 3600
-                if hours_since < config.CONSOLIDATION_INTERVAL_HOURS:
-                    return  # Not due yet
-
-            if not config.MEM0_ENABLED or not config.MEM0_API_KEY:
-                return
-
-            logger.info(f"Running L2→L1 memory consolidation for user '{user_id}'...")
-
-            # Pull recent memories from Mem0
-            from mem0 import MemoryClient
-            mem0 = MemoryClient(api_key=config.MEM0_API_KEY)
-            results = mem0.search(
-                query="user preferences habits profile facts",
-                filters={"AND": [{"user_id": user_id}]}
-            )
-            if results and isinstance(results, dict):
-                results = results.get("results", results)
-
-            mem0_strings = []
-            if isinstance(results, list):
-                mem0_strings = [r["memory"] for r in results if "memory" in r]
-
-            if not mem0_strings:
-                logger.info("No L2 memories found for consolidation.")
-                await set_setting(f"last_consolidation_{user_id}", str(now_ts))
-                return
-
-            # Evaluate and promote
-            from logic.memory_manager import memory_manager
-            llm = get_model("gpt-cloud")
-            promoted = await memory_manager.consolidate_l2_to_l1(
-                user_id, mem0_strings, llm
-            )
-
-            await set_setting(f"last_consolidation_{user_id}", str(now_ts))
-            logger.info(f"Consolidation complete: {promoted} facts promoted to L1.")
-
-        except Exception as e:
-            logger.error(f"Memory consolidation error: {e}")
-
     async def _listen_for_wakeups(self, wakeup_event: asyncio.Event):
         from core.event_bus import event_bus, EventType
         async for event in event_bus.subscribe(EventType.SUPERVISOR_WAKEUP.value):

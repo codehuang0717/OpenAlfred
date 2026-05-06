@@ -43,21 +43,24 @@ SUMMARY_PROMPT = """\
 """
 
 KNOWLEDGE_EXTRACTION_PROMPT = """\
-提取以下多轮对话中关于用户的新事实、偏好和习惯。只提取明确的、可以长期保留的信息。忽略已在上方[已有记忆]中存在的重复内容。
+从以下多轮对话中提取关于用户的**新**事实、偏好和习惯。
 
-输出 JSON 数组（没有新事实则输出空数组 []）：
+{existing_memories}
+**重要：上面 [已有记忆] 中已存在的信息不要再提取。只有真正的新信息才需要输出。如果没有新信息，输出空数组 []。**
+
+输出 JSON 数组：
 [{{"category": "profile|preferences|relationship|patterns", "fact": "...", "importance": "high|medium|low"}}]
 
 分类说明：
-- profile: 姓名、身份、学校、工作、重要日期等核心个人信息
-- preferences: 偏好、喜欢/讨厌的事物、兴趣、技术栈偏好
+- profile: 姓名、身份、学校、工作、重要日期
+- preferences: 偏好、喜欢/讨厌的事物、兴趣
 - relationship: 关系状态、与他人的互动
-- patterns: 行为模式、习惯、工作方式、学习方式
+- patterns: 行为模式、习惯、工作方式
 
 对话轮次：
 {conversation}
 
-只输出 JSON 数组，不要包含其他文字。"""
+只输出 JSON 数组。"""
 
 TITLE_GENERATION_PROMPT = """\
 为以下对话生成简短标题。只输出标题。

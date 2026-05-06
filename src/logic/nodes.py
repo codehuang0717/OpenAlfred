@@ -1,13 +1,10 @@
 from utils.logger import get_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Literal
 import json
 import re
-import traceback
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langgraph.prebuilt import ToolNode
 
 from logic.schema import AgentState
 from services.llm import get_model, get_bound_model
@@ -95,6 +92,41 @@ async def agent_node(state: AgentState, config):
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
     model_selection = conf.get("model_selection") or state.model_selection or "gpt-cloud"
 
+    # ── Error mapping helper ──
+    def _map_llm_error(e: Exception) -> str:
+        """Map LLM provider exceptions to user-facing Chinese messages."""
+        name = type(e).__name__
+        msg = str(e)
+
+        # OpenAI context overflow
+        if "context_length_exceeded" in msg or "context overflow" in msg.lower():
+            return f"上下文过长，超出模型限制。请缩短对话或开启新会话。"
+
+        # Generic context / token limit clues
+        if "reduce the length" in msg.lower() or "limit is" in msg.lower():
+            return f"上下文超过模型 token 上限，请精简消息或切换支持更长上下文的模型。"
+
+        # Gemini model not found
+        if "not found" in msg.lower() and ("model" in msg.lower() or "gemini" in msg.lower()):
+            return f"模型不存在：{msg.split(chr(10))[0][:120]}"
+
+        # Auth errors (401/403)
+        if "401" in msg or "403" in msg or "unauthorized" in msg.lower() or "permission" in msg.lower():
+            return f"API 认证失败，请检查对应模型的 API Key 是否正确配置。"
+
+        # Rate limit
+        if "429" in msg or "rate limit" in msg.lower() or "quota" in msg.lower():
+            return f"API 调用频率超限，请稍后重试。"
+
+        # Bad request — pass through the API's own message
+        if "400" in msg or "bad request" in msg.lower():
+            brief = msg.split("\n")[0] if "\n" in msg else msg
+            return f"请求参数错误：{brief[:200]}"
+
+        # Fallback: include exception type + first line
+        brief = msg.split("\n")[0] if "\n" in msg else msg
+        return f"{name}：{brief[:200]}"
+
     # ── Tool Selection ──
     # Check if this is a voice call scenario
     metadata = config.get("metadata", {}) if isinstance(config, dict) else getattr(config, "metadata", {})
@@ -129,7 +161,13 @@ async def agent_node(state: AgentState, config):
     prompt_messages = [system_msg] + recent_history
         
     # Run the model
-    response = await llm.ainvoke(prompt_messages, config)
+    try:
+        response = await llm.ainvoke(prompt_messages, config)
+    except Exception as e:
+        friendly = _map_llm_error(e)
+        logger.error(f"[AgentNode] LLM error (model={model_selection}): {friendly}")
+        error_msg = AIMessage(content=f"❌ {friendly}")
+        return {"messages": [error_msg]}
     return {"messages": [response]}
 
 
@@ -181,18 +219,12 @@ async def summarize_node(state: AgentState, config):
 
 async def extract_knowledge_node(state: AgentState, config):
     """
-    Post-processing node to extract user facts/preferences from ALL unextracted
-    conversation turns and merge into L1 local memory files.
-
-    Key design:
-    - Accumulates messages since last extraction (no information is lost)
-    - Uses a turn counter to throttle frequency (default: every 3 turns)
-    - Feeds all unextracted turns into a single extraction call (batch extraction)
+    Every N turns, ask the LLM to review the conversation and update memory files.
+    The LLM sees ALL existing memories first, so it won't duplicate.
     """
     interval = app_config.EXTRACTION_INTERVAL
     counter = getattr(state, "extraction_counter", 0) + 1
 
-    # Trigger gate: accumulate turns, only extract every N turns
     if counter < interval:
         return {"extraction_counter": counter}
 
@@ -200,11 +232,12 @@ async def extract_knowledge_node(state: AgentState, config):
     if len(messages) < 2:
         return {"extraction_counter": 0}
 
-    # Collect all user+assistant pairs since last extraction
     prev_extracted = getattr(state, "extracted_msg_count", 0)
     unextracted = messages[prev_extracted:]
+    if len(unextracted) < 2:
+        return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
-    # Build conversation transcript from unextracted messages
+    # Build conversation transcript
     turns: list[str] = []
     i = 0
     while i < len(unextracted):
@@ -212,7 +245,6 @@ async def extract_knowledge_node(state: AgentState, config):
         if isinstance(m, HumanMessage) and m.content:
             user_text = str(m.content).strip()
             if len(user_text) >= app_config.EXTRACTION_MIN_MSG_LENGTH:
-                # Find the next assistant reply (text only, not tool calls)
                 assistant_text = ""
                 for j in range(i + 1, len(unextracted)):
                     am = unextracted[j]
@@ -232,20 +264,26 @@ async def extract_knowledge_node(state: AgentState, config):
     user_id = resolved if resolved != "default" else (state.user_id or "default")
     conversation_text = "\n---\n".join(turns)
 
+    # Load existing memories so the LLM can avoid duplicates
+    existing = memory_manager.load_all_memories(user_id)
+    existing_block = f"\n[已有记忆]\n{existing}\n" if existing else ""
+
     try:
         llm = get_model("gpt-cloud")
-        prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(conversation=conversation_text)
+        prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(
+            existing_memories=existing_block,
+            conversation=conversation_text,
+        )
         result = await llm.ainvoke(
             [HumanMessage(content=prompt)],
             config={"callbacks": []}
         )
-        raw_content = result.content
-        if not raw_content:
+        text = result.content
+        if not text:
             return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-        if not isinstance(raw_content, str):
-            raw_content = str(raw_content)
-        text = raw_content.strip()
-
+        if not isinstance(text, str):
+            text = str(text)
+        text = text.strip()
         if "```" in text:
             text = re.sub(r"```\w*", "", text).replace("```", "").strip()
 
@@ -253,38 +291,32 @@ async def extract_knowledge_node(state: AgentState, config):
         if not isinstance(facts, list) or len(facts) == 0:
             return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
-        valid_facts = []
+        # Map category to filename, append each fact
+        cat_to_file = {
+            "profile": "profile.md",
+            "preferences": "preferences.md",
+            "relationship": "relationship.md",
+            "patterns": "learned_patterns.md",
+        }
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        added = 0
         for f in facts:
-            if isinstance(f, dict) and "fact" in f:
-                valid_facts.append({
-                    "category": f.get("category", "profile"),
-                    "fact": f["fact"],
-                    "importance": f.get("importance", "medium"),
-                })
+            if not isinstance(f, dict) or "fact" not in f:
+                continue
+            fname = cat_to_file.get(f.get("category", "profile"), "profile.md")
+            line = f"- [{timestamp}] {f['fact']}"
+            # Simple substring check to avoid obvious duplicates
+            if line.strip().lower() in existing.lower():
+                continue
+            memory_manager.append_to_memory_file(user_id, fname, line)
+            added += 1
 
-        if not valid_facts:
-            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-
-        added = await memory_manager.extract_and_merge(user_id, valid_facts, llm)
-        logger.info(f"Knowledge extraction (counter={counter}, {len(turns)} turns): "
-                     f"{len(valid_facts)} facts found, added to {added} for '{user_id}'")
-
-        if app_config.MEM0_ENABLED:
-            try:
-                from mem0 import MemoryClient
-                mem0 = MemoryClient(api_key=app_config.MEM0_API_KEY)
-                for f in valid_facts:
-                    mem0.add(
-                        messages=[{"role": "user", "content": f['fact']}],
-                        user_id=user_id
-                    )
-                logger.debug(f"L2 Mem0 updated with {len(valid_facts)} facts")
-            except Exception as e:
-                logger.warning(f"L2 Mem0 write failed (non-blocking): {e}")
+        if added:
+            logger.info(f"Memory extraction: {len(facts)} facts found, {added} added for '{user_id}'")
 
     except json.JSONDecodeError:
-        logger.debug(f"Failed to parse knowledge extraction JSON. Raw: {text[:200]}")
+        logger.debug(f"Extraction JSON parse failed. Raw: {text[:200]}")
     except Exception as e:
-        logger.warning(f"Knowledge extraction failed: {e}\n{traceback.format_exc()}")
+        logger.warning(f"Memory extraction failed: {e}")
 
     return {"extraction_counter": 0, "extracted_msg_count": len(messages)}

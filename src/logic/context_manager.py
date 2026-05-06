@@ -27,7 +27,6 @@ logger = logging.getLogger("context-manager")
 
 from logic.prompts import (
     SUMMARY_PROMPT,
-    KNOWLEDGE_EXTRACTION_PROMPT,
     TITLE_GENERATION_PROMPT,
 )
 
@@ -135,15 +134,6 @@ class ContextManager:
         """Build the prompt for conversation summarization."""
         conversation = self.format_messages_for_summary(messages)
         return SUMMARY_PROMPT.format(conversation=conversation)
-
-    def build_knowledge_extraction_prompt(
-        self, user_message: str, assistant_message: str
-    ) -> str:
-        """Build the prompt for extracting long-term knowledge."""
-        return KNOWLEDGE_EXTRACTION_PROMPT.format(
-            user_message=user_message,
-            assistant_message=assistant_message,
-        )
 
     @staticmethod
     def build_title_prompt(first_message: str) -> str:
