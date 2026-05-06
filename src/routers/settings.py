@@ -19,24 +19,50 @@ class SupervisorConfigRequest(BaseModel):
 
 @router.get("/models")
 async def get_models():
-    """Get list of available LLM models."""
+    """Get list of available LLM models across all providers."""
     from core.config import config
-    return [
-        {
+    models = []
+
+    # OpenAI GPT
+    if config.OPENAI_API_KEY:
+        models.append({
             "id": "gpt-cloud",
             "name": config.CLOUD_CHAT_MODEL,
             "provider": "OpenAI",
             "icon": "zap",
-            "description": "Cloud model for complex tasks."
-        },
-        {
-            "id": "gemma-local",
-            "name": config.LOCAL_MODEL_NAME,
-            "provider": "Ollama",
+            "description": f"GPT model ({config.CLOUD_CHAT_MODEL})"
+        })
+
+    # Cerebras (OpenAI-compatible via Cerebras API)
+    if config.CEREBRAS_API_KEY:
+        models.append({
+            "id": "cerebras",
+            "name": config.CEREBRAS_CHAT_MODEL,
+            "provider": "Cerebras",
             "icon": "cpu",
-            "description": "Local model for privacy and offline use."
-        }
-    ]
+            "description": f"Cerebras Llama ({config.CEREBRAS_CHAT_MODEL})"
+        })
+
+    # Google Gemini
+    if config.GOOGLE_API_KEY:
+        models.append({
+            "id": "gemini",
+            "name": config.GEMINI_CHAT_MODEL,
+            "provider": "Google",
+            "icon": "sparkles",
+            "description": f"Gemini model ({config.GEMINI_CHAT_MODEL})"
+        })
+
+    # Local Ollama
+    models.append({
+        "id": "gemma-local",
+        "name": config.LOCAL_MODEL_NAME,
+        "provider": "Ollama",
+        "icon": "hard-drive",
+        "description": "Local model for privacy and offline use."
+    })
+
+    return models
 
 @router.get("/model/selection")
 async def get_model_selection_api(user: dict = Depends(get_current_user)):

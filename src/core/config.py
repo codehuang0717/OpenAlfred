@@ -39,11 +39,17 @@ class Config:
     # Database Settings
     DB_PATH = PROJECT_ROOT / "todos.db"
 
-    # Local Model Settings
+    # Multi-Provider API Keys
+    CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+
+    # Model Settings
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "gemma4:e2b")
     CLOUD_CHAT_MODEL = os.getenv("CLOUD_CHAT_MODEL", "gpt-5.4-nano")
     CLOUD_BROWSER_MODEL = os.getenv("CLOUD_BROWSER_MODEL", "gpt-5.4-mini")
+    CEREBRAS_CHAT_MODEL = os.getenv("CEREBRAS_CHAT_MODEL", "llama-4-scout")
+    GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
     BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
     # TTS Settings (Faster-Qwen3-TTS)

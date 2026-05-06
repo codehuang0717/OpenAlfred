@@ -10,7 +10,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 
 from logic.schema import AgentState
-from services.llm import get_model
+from services.llm import get_model, get_bound_model
 from logic.prompts import AGENT_SYSTEM_PROMPT, KNOWLEDGE_EXTRACTION_PROMPT
 from core.database import get_thread_memory, set_thread_memory
 from logic.context_manager import ContextManager
@@ -91,8 +91,10 @@ async def agent_node(state: AgentState, config):
     from tools import ALL_TOOLS
     from tools.browser import web_browser_task
     
-    model_selection = state.model_selection or "gpt-cloud"
-    
+    # model_selection priority: config.configurable > state > default
+    conf = config.get("configurable", {}) if isinstance(config, dict) else {}
+    model_selection = conf.get("model_selection") or state.model_selection or "gpt-cloud"
+
     # ── Tool Selection ──
     # Check if this is a voice call scenario
     metadata = config.get("metadata", {}) if isinstance(config, dict) else getattr(config, "metadata", {})
@@ -107,8 +109,9 @@ async def agent_node(state: AgentState, config):
         selected_tools = list(ALL_TOOLS)
         logger.info(f"[AgentNode] Text chat detected. Binding all {len(selected_tools)} tools.")
     
-    # Bind tools to the model
-    llm = get_model(model_selection).bind_tools(selected_tools)
+    # Bind tools to the model (cached by model + tool set)
+    tool_names = frozenset(t.name for t in selected_tools)
+    llm = get_bound_model(model_selection, tool_names, ALL_TOOLS)
     
     # Construction of the dynamic prompt:
     # 1. Prepend the transient system instruction (with current time/summary)
