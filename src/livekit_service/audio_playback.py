@@ -13,13 +13,24 @@ from core.database import AUDIO_CACHE_DIR
 
 logger = get_logger("livekit-audio")
 
-async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event):
-    """Generate and play TTS audio in the LiveKit room."""
+async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event, start_event: asyncio.Event = None):
+    """Generate and play TTS audio in the LiveKit room.
+
+    If start_event is provided and not yet set, audio is prefetched in the
+    background and playback is deferred until start_event is set — eliminating
+    the TTS cold-start gap after a transition audio finishes.
+    """
+    t0 = time.time()
+    defer_playback = start_event is not None and not start_event.is_set()
+    logger.info(f"[TIMING][TTS] START | text_len={len(text)} | deferred={defer_playback} | t={t0:.3f}")
+
     latency_tracker.start("tts_generate")
-    source = rtc.AudioSource(24000, 1)
-    track = rtc.LocalAudioTrack.create_audio_track("tts", source)
-    publication = await room.local_participant.publish_track(track)
-    logger.info(f"DEBUG-PUBLISHING: Published NEW TTS track: {publication.sid}")
+    prefetch_buffer = bytearray() if defer_playback else None
+
+    source = None
+    track = None
+    publication = None
+
     try:
         latency_tracker.start("tts_first_chunk")
         first_chunk_found = False
@@ -38,15 +49,45 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
             if not first_chunk_found:
                 latency_tracker.end("tts_first_chunk")
                 latency_tracker.end("tts_generate")
+                t_first = time.time()
+                logger.info(f"[TIMING][TTS] FIRST_CHUNK | dt={t_first - t0:.3f}s")
                 first_chunk_found = True
+
+            if defer_playback and not start_event.is_set():
+                prefetch_buffer.extend(audio_chunk)
+                continue
+
+            # start_event just fired: publish track and merge prefetched audio
+            if defer_playback and len(prefetch_buffer) > 0:
+                t_pub = time.time()
+                logger.info(f"[TIMING][TTS] START_EVENT_FIRED | prefetch_bytes={len(prefetch_buffer)} | dt={t_pub - t0:.3f}s")
+                if source is None:
+                    source = rtc.AudioSource(24000, 1)
+                    track = rtc.LocalAudioTrack.create_audio_track("tts", source)
+                    publication = await room.local_participant.publish_track(track)
+                    logger.info(f"[TIMING][TTS] TRACK_PUBLISHED | dt={time.time() - t0:.3f}s")
+
+                jitter_buffer_bytes = bytes(prefetch_buffer) + audio_chunk
+                prefetch_buffer = bytearray()
+                defer_playback = False
+                continue
+
+            # Lazy publish: defer track creation until ready to play
+            if source is None:
+                source = rtc.AudioSource(24000, 1)
+                track = rtc.LocalAudioTrack.create_audio_track("tts", source)
+                publication = await room.local_participant.publish_track(track)
+                logger.info(f"[TIMING][TTS] TRACK_PUBLISHED | dt={time.time() - t0:.3f}s")
 
             jitter_buffer_bytes += audio_chunk
 
             if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
+                t_play = time.time()
+                logger.info(f"[TIMING][TTS] PLAYBACK_START | dt={t_play - t0:.3f}s")
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
                 playback_started = True
-                start_time = time.time()
+                start_time = t_play
 
             if playback_started:
                 audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
@@ -61,7 +102,30 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                         frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
                         await source.capture_frame(frame)
                         total_samples_pushed += len(chunk)
-                await asyncio.sleep(0.01)
+
+        # Flush prefetched audio if we deferred
+        if defer_playback and len(prefetch_buffer) > 0 and not interrupt_event.is_set():
+            if source is None:
+                source = rtc.AudioSource(24000, 1)
+                track = rtc.LocalAudioTrack.create_audio_track("tts", source)
+                publication = await room.local_participant.publish_track(track)
+                logger.info(f"DEBUG-PUBLISHING: Published NEW TTS track (deferred): {publication.sid}")
+
+            if not playback_started:
+                latency_tracker.start("tts_playback")
+                latency_tracker.start("tts_audio_stream")
+                playback_started = True
+                start_time = time.time()
+
+            prefetch_np = np.frombuffer(prefetch_buffer, dtype=np.int16)
+            for i in range(0, len(prefetch_np), 480):
+                if interrupt_event.is_set():
+                    break
+                chunk = prefetch_np[i : i + 480]
+                if len(chunk) > 0:
+                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
+                    await source.capture_frame(frame)
+                    total_samples_pushed += len(chunk)
 
         # Final cleanup for remaining small chunks
         if jitter_buffer_bytes and not interrupt_event.is_set():
@@ -77,7 +141,9 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 await source.capture_frame(frame)
                 total_samples_pushed += len(chunk)
 
-        latency_tracker.end("tts_audio_stream")
+        if playback_started:
+            latency_tracker.end("tts_audio_stream")
+            logger.info(f"[TIMING][TTS] STREAM_DONE | total_samples={total_samples_pushed} | dt={time.time() - t0:.3f}s")
 
         # Wait for audio to drain
         if total_samples_pushed > 0 and not interrupt_event.is_set():
@@ -87,12 +153,14 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
             if remaining > 0:
                 await asyncio.sleep(remaining + 0.3)
 
-        latency_tracker.end("tts_playback")
+        if playback_started:
+            latency_tracker.end("tts_playback")
     except asyncio.CancelledError:
-        logger.info("[VoiceInterrupt] TTS audio task cancelled gracefully.")
+        logger.info(f"[TIMING][TTS] CANCELLED | dt={time.time() - t0:.3f}s")
     finally:
-        logger.info(f"DEBUG-PUBLISHING: Unpublishing TTS track: {publication.sid}")
-        await room.local_participant.unpublish_track(publication.sid)
+        if publication:
+            logger.info(f"[TIMING][TTS] DONE | total_dt={time.time() - t0:.3f}s")
+            await room.local_participant.unpublish_track(publication.sid)
         if "[TERMINATE]" in text:
             logger.info("Termination signal detected in Agent response. Hanging up...")
             should_exit_event.set()
@@ -206,18 +274,18 @@ async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_ev
         await room.local_participant.unpublish_track(publication.sid)
 
 async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, tool_name: str = None):
-    """Play a transition audio file based on the tool called, or a generic fallback."""
+    """Play a single transition audio file based on the tool called, or a generic fallback."""
     transition_dir = config.ASSETS_DIR / "transitions"
     if not transition_dir.exists():
         logger.info("[Transition] Transition directory missing, skipping.")
         return
-        
+
     wav_path = None
     if tool_name:
         specific_path = transition_dir / f"{tool_name}.wav"
         if specific_path.exists():
             wav_path = specific_path
-            
+
     if not wav_path:
         generic_files = ["checking.wav", "hmm.wav", "thinking.wav", "wait.wav", "working.wav"]
         available_generics = [f for f in generic_files if (transition_dir / f).exists()]
@@ -225,18 +293,23 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
             wav_path = transition_dir / random.choice(available_generics)
         else:
             return
-            
-    logger.info(f"[Transition] Selected transition audio: {os.path.basename(wav_path)}")
-    
+
+    t0 = time.time()
+    logger.info(f"[TIMING][Transition] START | tool={tool_name} | file={os.path.basename(wav_path)} | t={t0:.3f}")
+
     source = rtc.AudioSource(24000, 1)
     track = rtc.LocalAudioTrack.create_audio_track("transition", source)
     publication = await room.local_participant.publish_track(track)
-    
+    logger.info(f"[TIMING][Transition] TRACK_PUBLISHED | dt={time.time() - t0:.3f}s")
+
     try:
         with wave.open(str(wav_path), "rb") as wf:
             framerate = wf.getframerate()
             audio_data = wf.readframes(wf.getnframes())
-            
+
+        audio_duration = len(audio_data) / (framerate * wf.getsampwidth() * wf.getnchannels())
+        logger.info(f"[TIMING][Transition] AUDIO_LOADED | duration={audio_duration:.2f}s | dt={time.time() - t0:.3f}s")
+
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
         if framerate != 24000:
             audio_np = np.interp(
@@ -245,7 +318,9 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
                 audio_np,
             ).astype(np.int16)
 
+        t_push_start = time.time()
         chunk_size = 480
+        frames_pushed = 0
         for i in range(0, len(audio_np), chunk_size):
             if interrupt_event.is_set():
                 break
@@ -253,14 +328,89 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
             if len(chunk) > 0:
                 frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
                 await source.capture_frame(frame)
-            await asyncio.sleep(0.01)
-            
+                frames_pushed += 1
+
+        t_push_end = time.time()
+        push_elapsed = t_push_end - t_push_start
+        audio_dur = len(audio_np) / 24000
+        logger.info(f"[TIMING][Transition] FRAMES_PUSHED | frames={frames_pushed} | push_time={push_elapsed:.3f}s | audio_dur={audio_dur:.3f}s | dt={t_push_end - t0:.3f}s")
+
         if not interrupt_event.is_set():
-            await asyncio.sleep(len(audio_np) / 24000 + 0.1)
-            
+            remaining = audio_dur - push_elapsed
+            if remaining > 0:
+                logger.info(f"[TIMING][Transition] DRAIN_WAIT | remaining={remaining:.3f}s")
+                await asyncio.sleep(remaining + 0.1)
+
+        logger.info(f"[TIMING][Transition] DONE | total_dt={time.time() - t0:.3f}s")
+
     except asyncio.CancelledError:
+        logger.info(f"[TIMING][Transition] CANCELLED | dt={time.time() - t0:.3f}s")
         pass
     except Exception as e:
         logger.error(f"[Transition] Error playing transition audio: {e}")
     finally:
         await room.local_participant.unpublish_track(publication.sid)
+
+
+async def play_transition_audio_loop(room: rtc.Room, interrupt_event: asyncio.Event, stop_event: asyncio.Event, tool_name: str = None):
+    """Play transition audio in a loop until interrupted or stopped.
+
+    Keeps playing random transition audio files back-to-back to fill the
+    silence during tool execution + LLM response. Stops when either
+    interrupt_event (user speaks) or stop_event (message arrived) is set.
+    """
+    transition_dir = config.ASSETS_DIR / "transitions"
+    if not transition_dir.exists():
+        logger.info("[Transition] Transition directory missing, skipping.")
+        return
+
+    generic_files = ["checking.wav", "hmm.wav", "thinking.wav", "wait.wav", "working.wav"]
+    available_generics = [f for f in generic_files if (transition_dir / f).exists()]
+    if not available_generics:
+        return
+
+    logger.info("[Transition] Starting transition audio loop")
+    iteration = 0
+
+    while not interrupt_event.is_set() and not stop_event.is_set():
+        iteration += 1
+        wav_path = transition_dir / random.choice(available_generics)
+        logger.info(f"[Transition] Loop iteration {iteration}: {os.path.basename(wav_path)}")
+
+        source = rtc.AudioSource(24000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track("transition", source)
+        publication = await room.local_participant.publish_track(track)
+
+        try:
+            with wave.open(str(wav_path), "rb") as wf:
+                framerate = wf.getframerate()
+                audio_data = wf.readframes(wf.getnframes())
+
+            audio_np = np.frombuffer(audio_data, dtype=np.int16)
+            if framerate != 24000:
+                audio_np = np.interp(
+                    np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
+                    np.arange(len(audio_np)),
+                    audio_np,
+                ).astype(np.int16)
+
+            chunk_size = 480
+            for i in range(0, len(audio_np), chunk_size):
+                if interrupt_event.is_set() or stop_event.is_set():
+                    break
+                chunk = audio_np[i : i + chunk_size]
+                if len(chunk) > 0:
+                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
+                    await source.capture_frame(frame)
+
+            if not interrupt_event.is_set() and not stop_event.is_set():
+                await asyncio.sleep(len(audio_np) / 24000 + 0.1)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[Transition] Error in loop: {e}")
+        finally:
+            await room.local_participant.unpublish_track(publication.sid)
+
+    logger.info(f"[Transition] Transition audio loop stopped after {iteration} iterations")

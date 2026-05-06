@@ -175,7 +175,7 @@ class EarService:
 
                 if self.in_conversation:
                     if self.is_playing_sfx:
-                        # Skip our own SFX playback audio
+                        # Drop audio during local SFX playback to avoid acoustic echo
                         pass
                     elif not self.lk_client.is_connected:
                         # Gap: SFX done but LiveKit not yet connected — buffer audio

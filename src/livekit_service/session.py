@@ -8,7 +8,7 @@ from utils.logger import get_logger
 from utils.latency import latency_tracker
 from .stt import transcribe_audio
 from .agent_client import call_agent
-from .audio_playback import play_tts, play_transition_audio
+from .audio_playback import play_tts, play_transition_audio, play_transition_audio_loop
 
 logger = get_logger("livekit-session")
 
@@ -27,6 +27,7 @@ class VoiceSession:
         self.session_id = room.name
         
         self.interrupt_event = asyncio.Event()
+        self.transition_stop_event = asyncio.Event()
         self.current_tts_task = None
         self.current_transition_task = None
         self.last_activity_time = time.time()
@@ -121,6 +122,7 @@ class VoiceSession:
 
         # 2. Call Agent
         final_resp_text = ""
+        tts_start_event = asyncio.Event()
         self.is_agent_processing = True
         try:
             async for event_type, payload in call_agent(self.session_id, text, self.user_id):
@@ -136,21 +138,37 @@ class VoiceSession:
                     )
                 elif event_type == "message":
                     final_resp_text = payload
+                    # Start TTS immediately (prefetch) while transition still plays
+                    if not self.interrupt_event.is_set() and final_resp_text:
+                        t_msg = time.time()
+                        logger.info(f"========> [Agent Response]: {final_resp_text}")
+                        logger.info(f"[TIMING][Session] MESSAGE_ARRIVED | t={t_msg:.3f}")
+                        self.current_tts_task = asyncio.create_task(
+                            play_tts(self.room, final_resp_text, self.should_exit, self.interrupt_event, start_event=tts_start_event)
+                        )
+                        logger.info(f"[TIMING][Session] TTS_TASK_CREATED | dt={time.time() - t_msg:.3f}s")
         finally:
             self.is_agent_processing = False
 
         latency_tracker.end("agent_response")
         latency_tracker.end("end_to_end")
 
-        # 3. Play TTS
-        if not self.interrupt_event.is_set() and final_resp_text:
-            logger.info(f"========> [Agent Response]: {final_resp_text}")
-            # Wait for transition audio to finish before playing TTS
-            if self.current_transition_task and not self.current_transition_task.done():
-                logger.info("Waiting for transition audio to finish before playing TTS...")
-                await self.current_transition_task
+        # 3. Wait for transition to finish, then release TTS
+        t_wait_start = time.time()
+        if self.current_transition_task and not self.current_transition_task.done():
+            logger.info(f"[TIMING][Session] WAIT_TRANSITION_START | t={t_wait_start:.3f}")
+            await self.current_transition_task
+            logger.info(f"[TIMING][Session] WAIT_TRANSITION_DONE | dt={time.time() - t_wait_start:.3f}s")
+        else:
+            logger.info(f"[TIMING][Session] NO_TRANSITION_TO_WAIT | transition_active={self.current_transition_task is not None} | dt=0s")
 
-            if not self.interrupt_event.is_set():
+        if not self.interrupt_event.is_set() and final_resp_text:
+            t_set = time.time()
+            tts_start_event.set()
+            logger.info(f"[TIMING][Session] START_EVENT_SET | t={t_set:.3f}")
+            if not self.current_tts_task:
+                # No tool call — no transition played, start TTS directly
+                logger.info(f"========> [Agent Response]: {final_resp_text}")
                 self.current_tts_task = asyncio.create_task(
                     play_tts(self.room, final_resp_text, self.should_exit, self.interrupt_event)
                 )
