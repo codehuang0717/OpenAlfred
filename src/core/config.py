@@ -45,6 +45,9 @@ class Config:
     CLOUD_BROWSER_MODEL = os.getenv("CLOUD_BROWSER_MODEL", "gpt-5.4-mini")
     CEREBRAS_CHAT_MODEL = os.getenv("CEREBRAS_CHAT_MODEL", "llama-4-scout")
     GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_FLASH_MODEL = os.getenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash")
+    DEEPSEEK_PRO_MODEL = os.getenv("DEEPSEEK_PRO_MODEL", "deepseek-v4-pro")
     BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
     # TTS Settings (Faster-Qwen3-TTS)

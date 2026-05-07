@@ -10,6 +10,7 @@ _model_cache: dict[str, BaseChatModel] = {}
 _bound_cache: dict[tuple, BaseChatModel] = {}
 
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 
 def _create_gpt_model() -> BaseChatModel:
@@ -27,6 +28,28 @@ def _create_cerebras_model() -> BaseChatModel:
         model=config.CEREBRAS_CHAT_MODEL,
         base_url=CEREBRAS_BASE_URL,
         api_key=config.CEREBRAS_API_KEY,
+    )
+
+
+def _create_deepseek_model() -> BaseChatModel:
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY not set, falling back to GPT")
+        return _create_gpt_model()
+    return ChatOpenAI(
+        model=config.DEEPSEEK_FLASH_MODEL,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=config.DEEPSEEK_API_KEY,
+    )
+
+
+def _create_deepseek_pro_model() -> BaseChatModel:
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY not set, falling back to GPT")
+        return _create_gpt_model()
+    return ChatOpenAI(
+        model=config.DEEPSEEK_PRO_MODEL,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=config.DEEPSEEK_API_KEY,
     )
 
 
@@ -65,6 +88,8 @@ _factories = {
     "cerebras": _create_cerebras_model,
     "gemini": _create_gemini_model,
     "gemma-local": _create_ollama_model,
+    "deepseek": _create_deepseek_model,
+    "deepseek-pro": _create_deepseek_pro_model,
 }
 
 

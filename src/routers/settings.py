@@ -53,6 +53,23 @@ async def get_models():
             "description": f"Gemini model ({config.GEMINI_CHAT_MODEL})"
         })
 
+    # DeepSeek (OpenAI-compatible)
+    if config.DEEPSEEK_API_KEY:
+        models.append({
+            "id": "deepseek",
+            "name": config.DEEPSEEK_FLASH_MODEL,
+            "provider": "DeepSeek",
+            "icon": "zap",
+            "description": f"DeepSeek Flash ({config.DEEPSEEK_FLASH_MODEL})"
+        })
+        models.append({
+            "id": "deepseek-pro",
+            "name": config.DEEPSEEK_PRO_MODEL,
+            "provider": "DeepSeek",
+            "icon": "star",
+            "description": f"DeepSeek Pro ({config.DEEPSEEK_PRO_MODEL})"
+        })
+
     # Local Ollama
     models.append({
         "id": "gemma-local",
