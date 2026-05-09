@@ -6,6 +6,11 @@ from core.config import config
 from utils.logger import get_logger
 from utils.latency import latency_tracker
 from utils.auth_utils import mint_service_jwt
+from logic.prompts import (
+    CALL_INBOUND_PROMPT,
+    CALL_OUTBOUND_PROMPT,
+    build_outbound_motivation_prompt,
+)
 
 logger = get_logger("livekit-agent-client")
 
@@ -78,16 +83,13 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
     
     if is_fresh:
         if call_type == "outbound" and initial_speech:
-            context = (
-                f"[系统指示] 你主动拨打了此电话。拨号动机: \"{initial_speech}\"。"
-                "请基于此动机与用户对话。使用简洁、自然的口语回复，严禁使用Markdown或-或空格等特殊符号，对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分。"
-            )
+            context = build_outbound_motivation_prompt(initial_speech)
             input_messages.append({"role": "system", "content": context})
             input_messages.append({"role": "assistant", "content": initial_speech})
         elif call_type == "outbound":
-            input_messages.append({"role": "system", "content": "[系统指示] 你主动呼叫了用户。请以友好的方式开始对话。对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分，严禁使用Markdown或-或空格等特殊符号。"})
+            input_messages.append({"role": "system", "content": CALL_OUTBOUND_PROMPT})
         else:
-            input_messages.append({"role": "system", "content": "[系统指示] 用户呼入了你的热线。请以友好的方式接待。对于日期时间等信息，请使用中文口语方式表达，比如14:27转换成下午两点二十七分，严禁使用Markdown或-或空格等特殊符号。"})
+            input_messages.append({"role": "system", "content": CALL_INBOUND_PROMPT})
         
         session_data["is_fresh"] = False
     
