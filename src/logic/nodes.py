@@ -1,8 +1,6 @@
 from utils.logger import get_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import json
-import re
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -86,7 +84,6 @@ async def agent_node(state: AgentState, config):
     Binds all tools by default. Excludes browser tasks for voice calls.
     """
     from tools import ALL_TOOLS
-    from tools.browser import web_browser_task
     
     # model_selection priority: config.configurable > state > default
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
@@ -134,7 +131,7 @@ async def agent_node(state: AgentState, config):
     
     if is_voice:
         # Slim tool set for lower latency: exclude browser, outbound call, and UI-oriented email tools
-        voice_exclude = {"web_browser_task", "make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"}
+        voice_exclude = {"make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"}
         selected_tools = [t for t in ALL_TOOLS if t.name not in voice_exclude]
         logger.info(f"[AgentNode] Voice call detected. Binding {len(selected_tools)}/{len(ALL_TOOLS)} tools (excluded: {voice_exclude}).")
     else:
@@ -226,15 +223,24 @@ async def extract_knowledge_node(state: AgentState, config):
     counter = getattr(state, "extraction_counter", 0) + 1
 
     if counter < interval:
+        logger.debug(
+            "[extract_knowledge] SKIP (counter=%d < interval=%d)",
+            counter, interval,
+        )
         return {"extraction_counter": counter}
 
     messages = state.messages
     if len(messages) < 2:
+        logger.debug("[extract_knowledge] SKIP (messages=%d < 2)", len(messages))
         return {"extraction_counter": 0}
 
     prev_extracted = getattr(state, "extracted_msg_count", 0)
     unextracted = messages[prev_extracted:]
     if len(unextracted) < 2:
+        logger.debug(
+            "[extract_knowledge] SKIP (unextracted=%d < 2, prev=%d)",
+            len(unextracted), prev_extracted,
+        )
         return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
     # Build conversation transcript
@@ -258,6 +264,10 @@ async def extract_knowledge_node(state: AgentState, config):
             i += 1
 
     if not turns:
+        logger.debug(
+            "[extract_knowledge] SKIP (no turns built | unextracted=%d)",
+            len(unextracted),
+        )
         return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
     resolved = _get_user_id_from_config(config)
@@ -268,27 +278,38 @@ async def extract_knowledge_node(state: AgentState, config):
     existing = memory_manager.load_all_memories(user_id)
     existing_block = f"\n[已有记忆]\n{existing}\n" if existing else ""
 
+    logger.debug(
+        "[extract_knowledge] ENTER extraction | user_id=%s | turns=%d | "
+        "existing_mem_len=%d | conv_len=%d",
+        user_id, len(turns), len(existing), len(conversation_text),
+    )
+
     try:
+        from utils.structured_output import structured_invoke, StructuredOutputError
+        from logic.schema import KnowledgeExtractionResult
+
         llm = get_model("gpt-cloud")
         prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(
             existing_memories=existing_block,
             conversation=conversation_text,
         )
-        result = await llm.ainvoke(
-            [HumanMessage(content=prompt)],
-            config={"callbacks": []}
+        logger.debug(
+            "[extract_knowledge] Calling structured_invoke | schema=KnowledgeExtractionResult",
         )
-        text = result.content
-        if not text:
-            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-        if not isinstance(text, str):
-            text = str(text)
-        text = text.strip()
-        if "```" in text:
-            text = re.sub(r"```\w*", "", text).replace("```", "").strip()
+        result = await structured_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            KnowledgeExtractionResult,
+            max_retries=2,
+            config={"callbacks": []},
+        )
+        logger.debug(
+            "[extract_knowledge] structured_invoke returned | facts=%d",
+            len(result.facts),
+        )
 
-        facts = json.loads(text)
-        if not isinstance(facts, list) or len(facts) == 0:
+        if not result.facts:
+            logger.debug("[extract_knowledge] No facts extracted (empty result)")
             return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
 
         # Map category to filename, append each fact
@@ -300,23 +321,39 @@ async def extract_knowledge_node(state: AgentState, config):
         }
         timestamp = datetime.now().strftime("%Y-%m-%d")
         added = 0
-        for f in facts:
-            if not isinstance(f, dict) or "fact" not in f:
-                continue
-            fname = cat_to_file.get(f.get("category", "profile"), "profile.md")
-            line = f"- [{timestamp}] {f['fact']}"
-            # Simple substring check to avoid obvious duplicates
+        skipped_dup = 0
+        for f in result.facts:
+            fname = cat_to_file.get(f.category, "profile.md")
+            line = f"- [{timestamp}] {f.fact}"
             if line.strip().lower() in existing.lower():
+                skipped_dup += 1
+                logger.debug(
+                    "[extract_knowledge] SKIP duplicate | cat=%s | fact=%.80s",
+                    f.category, f.fact,
+                )
                 continue
             memory_manager.append_to_memory_file(user_id, fname, line)
             added += 1
+            logger.debug(
+                "[extract_knowledge] WROTE | cat=%s | file=%s | fact=%.80s",
+                f.category, fname, f.fact,
+            )
 
-        if added:
-            logger.info(f"Memory extraction: {len(facts)} facts found, {added} added for '{user_id}'")
+        logger.info(
+            "[extract_knowledge] DONE | user_id=%s | found=%d | added=%d | "
+            "skipped_dup=%d",
+            user_id, len(result.facts), added, skipped_dup,
+        )
 
-    except json.JSONDecodeError:
-        logger.debug(f"Extraction JSON parse failed. Raw: {text[:200]}")
+    except StructuredOutputError as e:
+        logger.warning(
+            "[extract_knowledge] StructuredOutputError | user_id=%s | err=%s",
+            user_id, e,
+        )
     except Exception as e:
-        logger.warning(f"Memory extraction failed: {e}")
+        logger.warning(
+            "[extract_knowledge] Unexpected error | user_id=%s | err=%s | type=%s",
+            user_id, e, type(e).__name__,
+        )
 
     return {"extraction_counter": 0, "extracted_msg_count": len(messages)}

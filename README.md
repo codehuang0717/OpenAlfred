@@ -8,7 +8,8 @@
     <img src="https://img.shields.io/badge/LangGraph-Latest-orange?style=flat-square" alt="LangGraph" />
     <img src="https://img.shields.io/badge/LiveKit-Ready-brightgreen?style=flat-square" alt="LiveKit" />
     <img src="https://img.shields.io/badge/License-MIT-gray?style=flat-square" alt="License" />
-    <img src="https://img.shields.io/badge/Version-v1.2.0-blue?style=flat-square" alt="Version" />
+    <img src="https://img.shields.io/badge/Version-v1.3.0-blue?style=flat-square" alt="Version" />
+    <img src="https://img.shields.io/badge/MCP-Supported-purple?style=flat-square" alt="MCP" />
   </p>
 </div>
 
@@ -27,6 +28,8 @@ Whether it's managing your reminders, holding contextual long-term conversations
 - 📧 **Email Integration**: Built-in email processing and notification capabilities.
 - 🧩 **Modular Architecture**: Decoupled Event-Driven design via Redis Pub/Sub for seamless inter-service communication.
 - 💾 **Context & Memory**: Intelligent context management and long-term memory via SQLite and Mem0.
+- 🔌 **MCP Protocol Support**: Full Model Context Protocol client & server — connect to external MCP servers to import their tools, or expose OpenAlfred's 19 built-in tools via MCP to other AI apps (Claude Desktop, Continue, etc.).
+- 🎯 **Structured Output**: Multi-provider structured output utility with automatic native/JSON fallback — ensures LLM responses are type-safe Pydantic models across GPT, DeepSeek, Gemini, and Ollama.
 
 ## 🏗️ Deep Architecture
 
@@ -78,7 +81,20 @@ agent/src/
    # Fill in your LIVEKIT_URL, REDIS_URL, OPENAI_API_KEY, etc.
    ```
 
-3. **Launch All Services**:
+3. **(Optional) Configure MCP Servers**:
+   To import tools from external MCP servers, add to your `.env`:
+   ```bash
+   # JSON config for MCP client connections
+   MCP_SERVERS_CONFIG={"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","E:/temp"],"transport":"stdio"}}
+
+   # Expose OpenAlfred's tools as an MCP server
+   MCP_SERVER_ENABLED=true
+   MCP_SERVER_TRANSPORT=sse
+   MCP_SERVER_HOST=0.0.0.0
+   MCP_SERVER_PORT=8100
+   ```
+
+4. **Launch All Services**:
    The easiest way to boot up the entire backend stack:
    ```bash
    ./start-all.ps1
@@ -94,6 +110,100 @@ agent/src/
 
 ### Extending the Voice Logic
 Voice handling is centralized in `agent/src/livekit_service/`. You can customize VAD sensitivity or swap out TTS/STT providers by modifying the corresponding plugins in the voice pipeline setup.
+
+### Using Structured Output
+
+Get type-safe, validated responses from any LLM provider:
+
+```python
+from utils.structured_output import structured_invoke
+from services.llm import get_model
+from logic.schema import KnowledgeExtractionResult
+from langchain_core.messages import HumanMessage
+
+model = get_model("gpt-cloud")
+
+# Automatic native/fallback: GPT uses native with_structured_output(),
+# Ollama uses JSON prompting + Pydantic validation
+result = await structured_invoke(
+    model,
+    [HumanMessage(content="Extract user facts from this conversation...")],
+    KnowledgeExtractionResult,
+    max_retries=2,
+)
+# result is a validated KnowledgeExtractionResult Pydantic model
+for fact in result.facts:
+    print(f"[{fact.category}] {fact.fact}")
+```
+
+Or use the one-liner convenience wrapper:
+
+```python
+from services.llm import get_structured_response
+
+result = await get_structured_response(
+    "deepseek", messages, KnowledgeExtractionResult
+)
+```
+
+The utility automatically falls back from native structured output to JSON
+parsing across providers (GPT/Cerebras → native; DeepSeek/Gemini → try
+native then fallback; Ollama → always JSON).
+
+### MCP Client — Importing External Tools
+
+Connect OpenAlfred to any MCP-compatible tool server:
+
+1. Add server configs to `.env`:
+   ```bash
+   MCP_SERVERS_CONFIG={"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","E:/temp"],"transport":"stdio"},"weather":{"url":"http://localhost:8000/mcp","transport":"http"}}
+   ```
+
+2. MCP tools are loaded at import time and auto-integrated into the agent's
+   tool pipeline. No code changes needed — tools from configured servers
+   are available to the agent alongside built-in tools.
+
+3. Verify with the test script:
+   ```bash
+   uv run python ../scripts/test_mcp_client.py
+   ```
+
+### MCP Server — Exposing OpenAlfred Tools
+
+Run OpenAlfred as an MCP server that other AI apps can connect to:
+
+```bash
+# SSE mode (default) — connect from web clients or other AI apps
+uv run python -m services.mcp_server
+
+# stdio mode — for Claude Desktop / Cursor / Continue
+MCP_SERVER_TRANSPORT=stdio uv run python -m services.mcp_server
+```
+
+Claude Desktop config (`claude_desktop_config.json`):
+
+```json
+{
+    "mcpServers": {
+        "openalfred": {
+            "command": "uv",
+            "args": ["run", "--directory", "E:/PythonProjects/OpenAlfred/agent", "python", "-m", "services.mcp_server"],
+            "env": { "MCP_SERVER_TRANSPORT": "stdio" }
+        }
+    }
+}
+```
+
+This exposes all 19 built-in tools (todos, reminders, memory, email, screen
+capture, web search, browser automation, etc.) via the MCP protocol.
+
+### Manual Test Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/test_structured_output.py` | Test native + JSON fallback paths with real LLM |
+| `scripts/test_mcp_client.py` | Test connection to external MCP servers |
+| `scripts/test_mcp_server.py` | Verify which tools will be exposed via MCP |
 
 ## 📄 License
 

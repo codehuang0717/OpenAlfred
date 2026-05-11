@@ -108,6 +108,41 @@ def get_model(selection: str = "gpt-cloud") -> BaseChatModel:
     return _model_cache[selection]
 
 
+async def get_structured_response(
+    selection: str,
+    messages: list,
+    schema: type,
+    *,
+    max_retries: int = 2,
+    config: dict | None = None,
+):
+    """Get a structured (Pydantic) response from the specified LLM.
+
+    Convenience wrapper that combines model factory lookup with
+    structured_invoke for auto fallback across providers.
+    """
+    from utils.structured_output import structured_invoke
+
+    logger.debug(
+        "[get_structured_response] ENTER | model=%s | schema=%s | msgs=%d | retries=%d",
+        selection, schema.__name__, len(messages), max_retries,
+    )
+    model = get_model(selection)
+    try:
+        result = await structured_invoke(model, messages, schema, max_retries=max_retries, config=config)
+        logger.debug(
+            "[get_structured_response] OK | model=%s | schema=%s | result_type=%s",
+            selection, schema.__name__, type(result).__name__,
+        )
+        return result
+    except Exception as e:
+        logger.error(
+            "[get_structured_response] FAILED | model=%s | schema=%s | err=%s",
+            selection, schema.__name__, e,
+        )
+        raise
+
+
 def get_bound_model(selection: str, tool_names: frozenset, all_tools: list) -> BaseChatModel:
     """Get a model with tools pre-bound. Caches by (selection, tool_names) to
     avoid re-binding on every call — .bind_tools() creates schemas each time."""

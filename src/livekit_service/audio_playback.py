@@ -333,7 +333,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
         t_push_end = time.time()
         push_elapsed = t_push_end - t_push_start
         audio_dur = len(audio_np) / 24000
-        logger.info(f"[TIMING][Transition] FRAMES_PUSHED | frames={frames_pushed} | push_time={push_elapsed:.3f}s | audio_dur={audio_dur:.3f}s | dt={t_push_end - t0:.3f}s")
+        # logger.info(f"[TIMING][Transition] FRAMES_PUSHED | frames={frames_pushed} | push_time={push_elapsed:.3f}s | audio_dur={audio_dur:.3f}s | dt={t_push_end - t0:.3f}s")
 
         if not interrupt_event.is_set():
             remaining = audio_dur - push_elapsed

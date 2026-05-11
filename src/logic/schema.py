@@ -1,6 +1,6 @@
 from typing import Annotated, Optional, Literal
 from typing_extensions import TypedDict, NotRequired
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langgraph.graph.message import add_messages
 
 class TodoDict(TypedDict):
@@ -27,6 +27,23 @@ class AgentState(BaseModel):
     system_instruction: str = ""
     extraction_counter: int = 0
     extracted_msg_count: int = 0
+
+# ── Structured Output Schemas ──────────────────────────────────────────
+
+class KnowledgeExtractionFact(BaseModel):
+    """A single fact extracted from conversation about the user."""
+    category: Literal["profile", "preferences", "relationship", "patterns"]
+    fact: str = Field(description="The extracted fact about the user")
+    importance: Literal["high", "medium", "low"] = "medium"
+
+
+class KnowledgeExtractionResult(BaseModel):
+    """Collection of newly extracted facts (empty if nothing new)."""
+    facts: list[KnowledgeExtractionFact] = Field(
+        default_factory=list,
+        description="Newly extracted facts. Empty list if no new information found."
+    )
+
 
 class VoiceAgentState(TypedDict):
     """Logically consistent state for the voice pipeline."""

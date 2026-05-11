@@ -26,14 +26,18 @@ logger = get_logger("api")
 async def lifespan(app: FastAPI):
     # Initialize DB
     await init_db()
-    
+
     # Initialize EventBus (Redis)
     await event_bus.connect()
-    
-    logger.info("Database initialized. EventBus connected. Reminder scheduling is handled by worker.py via Redis events.")
+
+    # Load MCP tools (deferred from import time when event loop was running)
+    from tools import ensure_tools_loaded
+    await ensure_tools_loaded()
+
+    logger.info("Database initialized. EventBus connected. MCP tools loaded. Reminder scheduling is handled by worker.py via Redis events.")
 
     yield
-    
+
     # Cleanup
     await event_bus.close()
 
