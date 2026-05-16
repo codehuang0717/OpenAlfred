@@ -115,4 +115,11 @@ class Config:
     # Redis Settings (Event Bus)
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+    # RAG Settings
+    RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
+    RAG_CHROMA_DIR = str(PROJECT_ROOT / "chroma_db")
+    RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "500"))
+    RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "50"))
+    RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+
 config = Config()

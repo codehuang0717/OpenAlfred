@@ -54,3 +54,11 @@ from db.email_creds import (
     get_email_credentials,
     delete_email_credentials,
 )
+
+from db.rag import (
+    add_document,
+    get_documents,
+    get_document_by_id,
+    delete_document,
+    update_chunk_count,
+)

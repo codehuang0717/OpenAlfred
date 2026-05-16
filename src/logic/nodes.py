@@ -63,6 +63,11 @@ async def load_context_node(state: AgentState, config):
         f"[load_context] user_id={user_id} "
         f"(resolved={resolved} state_uid={state.user_id})"
     )
+
+    # Set RAG user_id context for tool calls
+    from tools.rag import _current_user_id
+    _current_user_id.set(user_id)
+
     l1_memories = memory_manager.build_injection_text(user_id)
 
     context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
@@ -88,6 +93,12 @@ async def agent_node(state: AgentState, config):
     # model_selection priority: config.configurable > state > default
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
     model_selection = conf.get("model_selection") or state.model_selection or "gpt-cloud"
+
+    # Ensure RAG user_id context is set for tool calls
+    from tools.rag import _current_user_id
+    uid = state.user_id or _get_user_id_from_config(config)
+    if uid and not _current_user_id.get():
+        _current_user_id.set(uid)
 
     # ── Error mapping helper ──
     def _map_llm_error(e: Exception) -> str:

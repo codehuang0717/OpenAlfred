@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.database import init_db
 from core.event_bus import event_bus
-from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events
+from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag
 
 from utils.logger import setup_logging, get_logger
 
@@ -72,6 +72,8 @@ app.include_router(email.router)
 app.include_router(settings.router)
 app.include_router(multimodal.router)
 app.include_router(events.router)
+app.include_router(rag.router)
+app.include_router(rag.images_router)
 
 
 @app.get("/")

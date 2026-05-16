@@ -24,3 +24,7 @@ logs/
 tests/test_supervisor.py
 logs/
 src/logic/__pycache__/
+src/logic/nodes.py
+data/
+src/core/
+chroma_db/

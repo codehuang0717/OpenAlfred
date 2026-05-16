@@ -6,6 +6,7 @@ from tools.eye import screen_tools
 from tools.email_tools import email_tools
 from tools.search import search_tools
 from tools.screenshot import screenshot_tools
+from tools.rag import rag_tools
 
 import asyncio
 import logging
@@ -21,7 +22,8 @@ _BUILTIN_TOOLS: list = (
     email_tools +
     screen_tools +
     search_tools +
-    screenshot_tools
+    screenshot_tools +
+    rag_tools
 )
 
 _import_logger.debug(

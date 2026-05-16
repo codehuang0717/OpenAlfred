@@ -170,6 +170,29 @@ async def init_db():
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                filename TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                file_type TEXT DEFAULT 'txt',
+                chunk_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS image_lookup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                alt TEXT DEFAULT '',
+                filename TEXT DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
         await db.commit()
 
 
