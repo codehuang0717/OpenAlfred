@@ -3,7 +3,7 @@ import json
 from langchain.tools import tool
 from rag.retriever import search as rag_search
 from db.rag import get_documents as db_list_documents
-from db.rag import get_image_by_id
+from db.rag import get_image_by_id, get_document_by_id
 from logic.prompts import RAG_SEARCH_RESULT_HEADER
 import logging
 
@@ -41,8 +41,7 @@ async def search_knowledge(query: str, top_k: int = 5) -> str:
     """Search the user's personal knowledge base for documents relevant to the query.
     Use this when the user asks about information that might be in their uploaded documents.
     Returns the most relevant text chunks with source filenames and images."""
-    from tools.rag import _current_user_id
-    user_id = _current_user_id.get()
+    user_id = _get_rag_user_id()
     if not user_id:
         return "Error: No user context available for knowledge search."
 
@@ -55,11 +54,23 @@ async def search_knowledge(query: str, top_k: int = 5) -> str:
     if not results:
         return "No relevant documents found in your knowledge base."
 
+    # Cache document lookups for date info
+    doc_cache: dict[str, str] = {}
+
     lines = []
     for i, r in enumerate(results, 1):
+        doc_id = r.get("document_id", "")
+        if doc_id and doc_id not in doc_cache:
+            doc = await get_document_by_id(doc_id)
+            if doc and doc.get("created_at"):
+                doc_cache[doc_id] = doc["created_at"][:10]  # YYYY-MM-DD
+            else:
+                doc_cache[doc_id] = ""
+
         heading = f" (## {r['heading']})" if r.get("heading") else ""
+        ingested = f" [摄入: {doc_cache[doc_id]}]" if doc_cache.get(doc_id) else ""
         content = await _resolve_content(r["content"])
-        block = f"[{i}] Source: {r['filename']}{heading} (relevance: {r['score']})\n{content}"
+        block = f"[{i}] Source: {r['filename']}{heading}{ingested} (relevance: {r['score']})\n{content}"
         lines.append(block)
 
     results_text = "\n\n---\n\n".join(lines)
@@ -70,8 +81,7 @@ async def search_knowledge(query: str, top_k: int = 5) -> str:
 async def list_knowledge(query: str = "") -> str:
     """List all documents in the user's personal knowledge base.
     Use this to show the user what documents they have uploaded."""
-    from tools.rag import _current_user_id
-    user_id = _current_user_id.get()
+    user_id = _get_rag_user_id()
     if not user_id:
         return "Error: No user context available."
 
@@ -90,9 +100,18 @@ async def list_knowledge(query: str = "") -> str:
     return "\n".join(lines)
 
 
+def _get_rag_user_id() -> str:
+    """Get user_id from context var or fallback global."""
+    uid = _current_user_id.get()
+    if uid:
+        return uid
+    return _user_id
+
+
 # Context variable for passing user_id to tools
 import contextvars
 _current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("rag_user_id", default="")
+_user_id = ""  # fallback global for when context var doesn't propagate
 
 
 rag_tools = [search_knowledge, list_knowledge]

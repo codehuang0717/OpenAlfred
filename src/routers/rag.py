@@ -6,7 +6,7 @@ import os
 
 from routers.auth import get_current_user
 from db.rag import get_documents, get_document_by_id
-from rag.ingestion import ingest_text, ingest_markdown_file
+from rag.ingestion import ingest_text, ingest_markdown_file, ingest_file
 from rag.retriever import search
 from rag.store import delete_document as delete_document_full
 from rag.image_handler import IMAGES_DIR
@@ -99,6 +99,39 @@ async def upload_file(
     else:
         doc = await ingest_text(user["id"], text, title or file.filename)
     return doc
+
+
+class IngestPathRequest(BaseModel):
+    filepath: str
+    title: str = ""
+
+
+@router.post("/ingest-path")
+async def ingest_by_path(req: IngestPathRequest, user: dict = Depends(get_current_user)):
+    """Ingest a file from a local path. Auto-resolves source_dir for images."""
+    if not req.filepath.strip():
+        raise HTTPException(status_code=400, detail="Filepath is empty")
+
+    # Dedup: check if this user already ingested this exact filepath
+    existing = await get_documents(user["id"])
+    import os
+    target_path = os.path.abspath(req.filepath.strip())
+    for doc in existing:
+        # Compare by filename + title (title is stem from path)
+        from pathlib import Path
+        expected_title = req.title or Path(target_path).stem
+        if doc["title"] == expected_title and doc["filename"].endswith(Path(target_path).suffix):
+            # Already exists — skip duplicate
+            logger.info("Duplicate ingest skipped: %s (existing doc_id=%s)", target_path, doc["id"])
+            return doc
+
+    try:
+        doc = await ingest_file(user["id"], req.filepath, req.title)
+        return doc
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/ingest-text")

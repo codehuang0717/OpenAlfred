@@ -64,9 +64,10 @@ async def load_context_node(state: AgentState, config):
         f"(resolved={resolved} state_uid={state.user_id})"
     )
 
-    # Set RAG user_id context for tool calls
-    from tools.rag import _current_user_id
-    _current_user_id.set(user_id)
+    # Set RAG user_id for tool calls
+    import tools.rag as rag_tools_mod
+    rag_tools_mod._current_user_id.set(user_id)
+    rag_tools_mod._user_id = user_id  # fallback global
 
     l1_memories = memory_manager.build_injection_text(user_id)
 
@@ -94,11 +95,14 @@ async def agent_node(state: AgentState, config):
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
     model_selection = conf.get("model_selection") or state.model_selection or "gpt-cloud"
 
-    # Ensure RAG user_id context is set for tool calls
-    from tools.rag import _current_user_id
+    # Ensure RAG user_id is available for tool calls.
+    # Using a module-level variable because contextvars may not
+    # propagate into LangGraph's ToolNode task.
+    import tools.rag as rag_tools_mod
     uid = state.user_id or _get_user_id_from_config(config)
-    if uid and not _current_user_id.get():
-        _current_user_id.set(uid)
+    if uid:
+        rag_tools_mod._current_user_id.set(uid)
+        rag_tools_mod._user_id = uid  # fallback global
 
     # ── Error mapping helper ──
     def _map_llm_error(e: Exception) -> str:
