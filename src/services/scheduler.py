@@ -10,6 +10,7 @@ from core.database import (
     mark_todo_notification_sent,
     get_reminder_by_id,
     get_todo_by_id,
+    get_user_bark_url,
 )
 from services.notification import notification_service
 
@@ -21,6 +22,7 @@ async def _send_bark_notification(
     subtitle: str = None,
     level: str = "active",
     sound: str = None,
+    bark_url: str = None,
 ) -> str:
     """Internal function to send Bark notification using the NotificationService."""
     success = await notification_service.send_bark_notification(
@@ -30,7 +32,8 @@ async def _send_bark_notification(
         level=level,
         sound=sound,
         group="OpenAlfred-Reminders",
-        icon="https://cdn-icons-png.flaticon.com/512/3602/3602123.png"
+        icon="https://cdn-icons-png.flaticon.com/512/3602/3602123.png",
+        bark_url=bark_url,
     )
     return "success" if success else "error"
 
@@ -54,13 +57,16 @@ async def check_and_send_pending_reminders():
                 )
                 logger.info(f"LiveKit SIP dialing status: {status}")
             else:
-                # Bark Push
+                # Bark Push — resolve per-user bark_url
+                user_id = r.get("user_id", "default")
+                bark_url = await get_user_bark_url(user_id)
                 await _send_bark_notification(
                     body=r['body'],
                     title=r.get('title'),
                     subtitle=r.get('subtitle'),
                     level=r.get('level', 'active'),
-                    sound=r.get('sound')
+                    sound=r.get('sound'),
+                    bark_url=bark_url,
                 )
             
             await mark_reminder_sent(r["id"])
@@ -101,12 +107,15 @@ async def send_single_reminder(reminder_id: str):
             )
             logger.info(f"LiveKit SIP dialing status: {status}")
         else:
+            user_id = r.get("user_id", "default")
+            bark_url = await get_user_bark_url(user_id)
             await _send_bark_notification(
                 body=r['body'],
                 title=r.get('title'),
                 subtitle=r.get('subtitle'),
                 level=r.get('level', 'active'),
-                sound=r.get('sound')
+                sound=r.get('sound'),
+                bark_url=bark_url,
             )
 
         await mark_reminder_sent(r["id"])

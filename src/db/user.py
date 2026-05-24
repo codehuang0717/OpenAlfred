@@ -86,7 +86,7 @@ async def get_user_by_id(user_id: str) -> Optional[dict]:
     async with get_db() as db:
         async with db.execute(
             "SELECT id, username, display_name, sip_extension, sip_password, "
-            "created_at, last_login_at FROM users WHERE id = ?",
+            "bark_url, created_at, last_login_at FROM users WHERE id = ?",
             (user_id,),
         ) as cursor:
             row = await cursor.fetchone()
@@ -136,6 +136,26 @@ async def update_user_password(user_id: str, password_hash: str):
         )
         await db.commit()
     logger.info(f"[update_user_password] id={user_id}")
+
+async def get_user_bark_url(user_id: str) -> str:
+    """Get the Bark push notification URL for a specific user. Returns empty string if not set."""
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT bark_url FROM users WHERE id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else ""
+
+
+async def set_user_bark_url(user_id: str, bark_url: str):
+    """Set the Bark push notification URL for a specific user."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET bark_url = ? WHERE id = ?", (bark_url, user_id)
+        )
+        await db.commit()
+    logger.info(f"[set_user_bark_url] user_id={user_id}")
+
 
 async def get_active_user() -> Optional[dict]:
     """Retrieve the user who logged in most recently."""

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from PIL import Image
 
-from core.database import get_setting, set_setting
+from core.database import get_setting, set_setting, get_user_bark_url, set_user_bark_url
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -173,7 +173,56 @@ async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = 
     await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
 
     return {
-        "status": "updated", 
+        "status": "updated",
         "recording_enabled": data.recording_enabled,
         "smart_supervision_enabled": data.smart_supervision_enabled
     }
+
+
+class NotifyConfigRequest(BaseModel):
+    bark_url: str = ""
+
+
+@router.get("/notify/config")
+async def get_notify_config(user: dict = Depends(get_current_user)):
+    """Get the current user's push notification configuration."""
+    bark_url = await get_user_bark_url(user["id"])
+    return {"bark_url": bark_url}
+
+
+@router.post("/notify/config")
+async def set_notify_config(data: NotifyConfigRequest, user: dict = Depends(get_current_user)):
+    """Update the current user's push notification configuration."""
+    await set_user_bark_url(user["id"], data.bark_url)
+    return {"status": "updated", "bark_url": data.bark_url}
+
+
+@router.delete("/notify/config")
+async def unbind_notify_config(user: dict = Depends(get_current_user)):
+    """Unbind (clear) the current user's Bark URL."""
+    await set_user_bark_url(user["id"], "")
+    return {"status": "unbound"}
+
+
+@router.post("/notify/test")
+async def test_notify(user: dict = Depends(get_current_user)):
+    """Send a test notification to the current user's Bark device."""
+    from services.notification import notification_service
+    from core.config import config as app_config
+
+    bark_url = await get_user_bark_url(user["id"]) or app_config.BARK_URL
+    if not bark_url:
+        raise HTTPException(status_code=400, detail="未配置 Bark URL，请先填入设备地址")
+
+    success = await notification_service.send_bark_notification(
+        body="如果你收到这条消息，说明 Bark 推送配置成功！",
+        title="✅ OpenAlfred 连接测试",
+        level="active",
+        sound="birdsong",
+        group="OpenAlfred-Test",
+        bark_url=bark_url,
+    )
+    if success:
+        return {"status": "ok", "message": "测试通知已发送"}
+    else:
+        raise HTTPException(status_code=502, detail="Bark 服务不可达，请检查 URL 是否正确")

@@ -155,6 +155,14 @@ async def init_db():
             except Exception:
                 pass
 
+        # Migration: add bark_url for per-user push notifications
+        try:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bark_url TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS email_credentials (
                 account_id TEXT PRIMARY KEY,

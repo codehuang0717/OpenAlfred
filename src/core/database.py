@@ -40,6 +40,8 @@ from db.user import (
     update_user_last_login,
     update_user_password,
     get_active_user,
+    get_user_bark_url,
+    set_user_bark_url,
 )
 
 from db.settings import set_setting, get_setting
