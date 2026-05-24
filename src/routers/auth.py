@@ -13,7 +13,10 @@ from core.database import (
     create_user,
     get_user_by_username,
     get_user_by_id,
+    get_user_password_hash,
+    update_user,
     update_user_last_login,
+    update_user_password,
 )
 from core.config import config
 
@@ -287,6 +290,45 @@ async def get_me(user: dict = Depends(get_current_user)):
         "created_at": user.get("created_at"),
         "sip_extension": user.get("sip_extension"),
     }
+
+
+class UpdateMeRequest(BaseModel):
+    display_name: str
+
+@router.put("/me")
+async def update_me(req: UpdateMeRequest, user: dict = Depends(get_current_user)):
+    """Update the current user's profile (display_name)."""
+    if not req.display_name or len(req.display_name.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Display name cannot be empty")
+    await update_user(user["id"], display_name=req.display_name.strip())
+    logger.info(f"[update_me] id={user['id']} display_name={req.display_name}")
+    return {"status": "updated", "display_name": req.display_name.strip()}
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+@router.put("/me/password")
+async def change_password(req: ChangePasswordRequest, user: dict = Depends(get_current_user)):
+    """Change the current user's password."""
+    if not req.old_password or not req.new_password:
+        raise HTTPException(status_code=400, detail="Both old and new passwords are required")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    if req.new_password == req.old_password:
+        raise HTTPException(status_code=400, detail="新密码不能与旧密码相同")
+
+    stored_hash = await get_user_password_hash(user["id"])
+    if not stored_hash or not bcrypt.checkpw(req.old_password.encode(), stored_hash.encode()):
+        raise HTTPException(status_code=400, detail="旧密码不正确")
+
+    new_hash = bcrypt.hashpw(req.new_password.encode(), bcrypt.gensalt()).decode()
+    await update_user_password(user["id"], new_hash)
+
+    logger.info(f"[change_password] id={user['id']} password changed")
+    return {"status": "updated"}
 
 
 @router.post("/refresh")

@@ -35,7 +35,10 @@ from db.user import (
     get_user_by_username,
     get_user_by_sip_extension,
     get_user_by_id,
+    get_user_password_hash,
+    update_user,
     update_user_last_login,
+    update_user_password,
     get_active_user,
 )
 

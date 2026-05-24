@@ -93,6 +93,25 @@ async def get_user_by_id(user_id: str) -> Optional[dict]:
             return dict(row) if row else None
 
 
+async def update_user(user_id: str, display_name: str = None):
+    """Update user profile fields. Only updates provided (non-None) fields."""
+    updates = []
+    params = []
+    if display_name is not None:
+        updates.append("display_name = ?")
+        params.append(display_name)
+    if not updates:
+        return
+    params.append(user_id)
+    async with get_db() as db:
+        await db.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    logger.info(f"[update_user] id={user_id} fields={list(dict(zip(updates, params)).keys())}")
+
+
 async def update_user_last_login(user_id: str):
     now = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:
@@ -100,6 +119,23 @@ async def update_user_last_login(user_id: str):
             "UPDATE users SET last_login_at = ? WHERE id = ?", (now, user_id)
         )
         await db.commit()
+
+async def get_user_password_hash(user_id: str) -> Optional[str]:
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT password_hash FROM users WHERE id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+
+async def update_user_password(user_id: str, password_hash: str):
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+        )
+        await db.commit()
+    logger.info(f"[update_user_password] id={user_id}")
 
 async def get_active_user() -> Optional[dict]:
     """Retrieve the user who logged in most recently."""
