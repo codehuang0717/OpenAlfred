@@ -1,13 +1,53 @@
+import os
 import logging
 import httpx
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from pydantic import BaseModel
+from PIL import Image
 
 from core.database import get_setting, set_setting
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["settings"])
+
+AGENT_AVATAR_DIR = Path(__file__).parent.parent / "uploads" / "agents"
+
+
+@router.get("/agent/config")
+async def get_agent_config(user: dict = Depends(get_current_user)):
+    avatar_path = AGENT_AVATAR_DIR / f"{user['id']}.jpg"
+    return {
+        "agent_avatar_url": f"/static/agents/{user['id']}.jpg" if avatar_path.exists() else "",
+    }
+
+
+@router.post("/agent/avatar")
+async def upload_agent_avatar(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片大小不能超过 5MB")
+
+    AGENT_AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = AGENT_AVATAR_DIR / f"tmp_{user['id']}"
+    tmp_path.write_bytes(content)
+
+    try:
+        img = Image.open(tmp_path).convert("RGB")
+        size = min(img.size)
+        left = (img.size[0] - size) // 2
+        top = (img.size[1] - size) // 2
+        img = img.crop((left, top, left + size, top + size))
+        img = img.resize((256, 256), Image.LANCZOS)
+        img.save(AGENT_AVATAR_DIR / f"{user['id']}.jpg", "JPEG", quality=85)
+    except Exception:
+        raise HTTPException(status_code=400, detail="无法处理的图片格式")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    return {"status": "uploaded", "agent_avatar_url": f"/static/agents/{user['id']}.jpg"}
 logger = logging.getLogger("settings-router")
 
 class ModelSelectionRequest(BaseModel):

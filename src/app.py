@@ -6,8 +6,11 @@ Now refactored to use modular routers.
 import logging
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from core.database import init_db
 from core.event_bus import event_bus
@@ -52,6 +55,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Ensure uploads dir exists at import time ---
+
+UPLOADS_DIR = Path(__file__).parent / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+(UPLOADS_DIR / "avatars").mkdir(parents=True, exist_ok=True)
+
 # --- Register Routers ---
 
 app.include_router(auth.router)
@@ -66,6 +75,10 @@ app.include_router(events.router)
 app.include_router(rag.router)
 app.include_router(rag.images_router)
 app.include_router(memory.router)
+
+# --- Static Files ---
+
+app.mount("/static", StaticFiles(directory=str(UPLOADS_DIR)), name="static")
 
 
 @app.get("/")

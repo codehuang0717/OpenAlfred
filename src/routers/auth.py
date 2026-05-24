@@ -1,11 +1,14 @@
+import os
 import uuid
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException, Depends, Header, Query, status
+from PIL import Image
+from fastapi import APIRouter, HTTPException, Depends, Header, Query, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -279,6 +282,17 @@ async def login(req: LoginRequest):
     }
 
 
+AVATAR_DIR = Path(__file__).parent.parent / "uploads" / "avatars"
+
+
+def _avatar_path(user_id: str) -> Path:
+    return AVATAR_DIR / f"{user_id}.jpg"
+
+
+def _avatar_url(user_id: str) -> str:
+    return f"/static/avatars/{user_id}.jpg" if _avatar_path(user_id).exists() else ""
+
+
 @router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
     """Retrieve the profile of the currently authenticated user."""
@@ -289,6 +303,7 @@ async def get_me(user: dict = Depends(get_current_user)):
         "display_name": user["display_name"],
         "created_at": user.get("created_at"),
         "sip_extension": user.get("sip_extension"),
+        "avatar_url": _avatar_url(user["id"]),
     }
 
 
@@ -303,6 +318,37 @@ async def update_me(req: UpdateMeRequest, user: dict = Depends(get_current_user)
     await update_user(user["id"], display_name=req.display_name.strip())
     logger.info(f"[update_me] id={user['id']} display_name={req.display_name}")
     return {"status": "updated", "display_name": req.display_name.strip()}
+
+
+@router.post("/me/avatar")
+async def upload_avatar(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Upload and crop/resize a new avatar image (max 5MB)."""
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片大小不能超过 5MB")
+
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Save temp file, then resize
+    tmp_path = _avatar_path(f"tmp_{user['id']}")
+    tmp_path.write_bytes(content)
+
+    try:
+        img = Image.open(tmp_path).convert("RGB")
+        size = min(img.size)
+        left = (img.size[0] - size) // 2
+        top = (img.size[1] - size) // 2
+        img = img.crop((left, top, left + size, top + size))
+        img = img.resize((256, 256), Image.LANCZOS)
+        img.save(_avatar_path(user["id"]), "JPEG", quality=85)
+    except Exception:
+        raise HTTPException(status_code=400, detail="无法处理的图片格式")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    logger.info(f"[upload_avatar] id={user['id']}")
+    return {"status": "uploaded", "avatar_url": _avatar_url(user["id"])}
 
 
 class ChangePasswordRequest(BaseModel):
