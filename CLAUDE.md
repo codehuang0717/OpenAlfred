@@ -45,7 +45,7 @@ Conditional edge: agent → tools (if tool_calls) or extract_knowledge (if text 
 
 ### Tools (tools/)
 
-Built-in tools listed in `tools/__init__.py` → `ALL_TOOLS` list. MCP tools appended at startup via `ensure_tools_loaded()`.
+Built-in tools listed in `tools/__init__.py` → `ALL_TOOLS` list.
 
 RAG tools (`tools/rag.py`) use both a `contextvars.ContextVar` and a module-level `_user_id` global — set in `load_context_node` and `agent_node` before LLM invocation.
 

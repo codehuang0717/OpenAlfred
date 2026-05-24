@@ -100,18 +100,6 @@ class Config:
     SUPERVISOR_PHONE_NUMBER = os.getenv("SUPERVISOR_PHONE_NUMBER", "100")
     SUPERVISOR_OCR_WINDOW_MINS = int(os.getenv("SUPERVISOR_OCR_WINDOW_MINS", "10"))
 
-    # MCP Client Settings (connect to external MCP servers)
-    # JSON string: {"server_name": {"command": "npx", "args": [...], "transport": "stdio"}}
-    # or for HTTP: {"server_name": {"url": "http://...", "transport": "http"}}
-    MCP_SERVERS_CONFIG = os.getenv("MCP_SERVERS_CONFIG", "")
-
-    # MCP Server Settings (expose OpenAlfred tools to other AI apps)
-    MCP_SERVER_ENABLED = os.getenv("MCP_SERVER_ENABLED", "false").lower() == "true"
-    MCP_SERVER_TRANSPORT = os.getenv("MCP_SERVER_TRANSPORT", "sse")
-    MCP_SERVER_HOST = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
-    MCP_SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "8100"))
-    MCP_SERVER_NAME = os.getenv("MCP_SERVER_NAME", "OpenAlfred")
-
     # Redis Settings (Event Bus)
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
