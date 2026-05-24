@@ -134,6 +134,33 @@ async def ingest_by_path(req: IngestPathRequest, user: dict = Depends(get_curren
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/select-file")
+async def select_file_via_dialog(user: dict = Depends(get_current_user)):
+    """Open a native Windows file dialog to let the user select a file on their disk."""
+    import subprocess
+    # PowerShell script to open file dialog and output selected file path
+    ps_script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$d = New-Object System.Windows.Forms.OpenFileDialog; "
+        "$d.Filter = 'Markdown Files (*.md)|*.md|All Files (*.*)|*.*'; "
+        "$d.Title = 'Select Markdown File for Knowledge Base'; "
+        "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }"
+    )
+    try:
+        res = subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            check=True,
+            creationflags=0x08000000  # CREATE_NO_WINDOW: prevent flashing terminal window
+        )
+        filepath = res.stdout.strip()
+        return {"filepath": filepath}
+    except Exception as e:
+        logger.error("Failed to open file dialog: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to open file dialog: {e}")
+
+
 @router.post("/ingest-text")
 async def ingest_text_api(req: IngestTextRequest, user: dict = Depends(get_current_user)):
     if not req.content.strip():
