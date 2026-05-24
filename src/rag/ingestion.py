@@ -42,7 +42,7 @@ def _read_pdf(filepath: str) -> str:
         )
 
 
-async def ingest_file(user_id: str, filepath: str, title: str = "") -> dict:
+async def ingest_file(user_id: str, filepath: str, title: str = "", progress_callback = None) -> dict:
     """Ingest a single file into the RAG knowledge base.
     For .md files, auto-detects source directory for image resolution.
     """
@@ -68,7 +68,9 @@ async def ingest_file(user_id: str, filepath: str, title: str = "") -> dict:
                 raise ImportError(
                     "DOCX support requires docx2txt. Install with: pip install docx2txt"
                 )
+        if progress_callback: progress_callback("embedding", 50)
         doc = await ingest_text(user_id, text, title or path.stem)
+        if progress_callback: progress_callback("done", 100)
         return doc
 
     if ext == ".md":
@@ -79,12 +81,15 @@ async def ingest_file(user_id: str, filepath: str, title: str = "") -> dict:
             content=content,
             title=title or path.stem,
             source_dir=str(path.parent),
+            progress_callback=progress_callback,
         )
         return doc
 
     # Plain text files
     text = _read_text_file(filepath)
+    if progress_callback: progress_callback("embedding", 50)
     doc = await ingest_text(user_id, text, title or path.stem)
+    if progress_callback: progress_callback("done", 100)
     return doc
 
 
@@ -94,6 +99,7 @@ async def ingest_markdown_file(
     content: str,
     title: str,
     source_dir: str | None = None,
+    progress_callback = None,
 ) -> dict:
     """Ingest a markdown file with image handling.
 
@@ -103,6 +109,7 @@ async def ingest_markdown_file(
     4. Store in ChromaDB + SQLite
     """
     logger.info("Ingesting markdown: title=%r chars=%d source_dir=%s", title, len(content), source_dir)
+    if progress_callback: progress_callback("parsing", 20)
 
     # Parse into sections
     sections = parse_markdown(content)
@@ -114,6 +121,7 @@ async def ingest_markdown_file(
 
     # Process images if source_dir provided
     if source_dir:
+        if progress_callback: progress_callback("images", 40)
         from rag.image_handler import process_section_images
 
         for sec in sections:
@@ -131,10 +139,7 @@ async def ingest_markdown_file(
         raise ValueError("Markdown produced no chunks (empty file?)")
 
     # Override doc_id — store_document will use our pre-generated one
-    # Actually, store_document calls add_document which generates its own ID.
-    # We need to store with our pre-generated doc_id so images dir matches.
-    # Workaround: use doc_id in title, and pass through store_document.
-    # But store_document generates a new UUID... let me handle this.
+    if progress_callback: progress_callback("embedding", 70)
     doc = await _store_with_id(
         user_id=user_id,
         doc_id=doc_id,
@@ -142,11 +147,13 @@ async def ingest_markdown_file(
         title=title,
         file_type="md",
         chunks=chunks,
+        progress_callback=progress_callback,
     )
     logger.info(
         "Ingested markdown: title=%r sections=%d chunks=%d doc_id=%s",
         title, len(sections), len(chunks), doc["id"],
     )
+    if progress_callback: progress_callback("done", 100)
     return doc
 
 
@@ -157,6 +164,7 @@ async def _store_with_id(
     title: str,
     file_type: str,
     chunks: list,
+    progress_callback = None,
 ) -> dict:
     """Store document with a pre-generated ID (needed for image path matching)."""
     from rag.embedding import embed_texts

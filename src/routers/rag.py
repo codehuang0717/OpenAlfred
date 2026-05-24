@@ -1,8 +1,10 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
+import uuid
+import time
 
 from routers.auth import get_current_user
 from db.rag import get_documents, get_document_by_id
@@ -17,6 +19,97 @@ router = APIRouter(prefix="/api/rag", tags=["rag"])
 
 # Image serving — public, no auth needed
 images_router = APIRouter(prefix="/api/images", tags=["images"])
+
+
+# ─── In-Memory Task Store ──────────────────────────────────
+ingestion_tasks = {}
+
+
+def cleanup_tasks():
+    """Remove tasks older than 30 minutes to prevent memory bloat."""
+    now = time.time()
+    for tid in list(ingestion_tasks.keys()):
+        if now - ingestion_tasks[tid].get("updated_at", 0) > 1800:
+            ingestion_tasks.pop(tid, None)
+
+
+async def run_ingest_path_task(task_id: str, user_id: str, filepath: str, title: str):
+    def progress_callback(stage: str, progress: int):
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "stage": stage,
+                "progress": progress,
+                "updated_at": time.time(),
+            })
+
+    try:
+        doc = await ingest_file(user_id, filepath, title, progress_callback=progress_callback)
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "status": "completed",
+                "stage": "done",
+                "progress": 100,
+                "result": doc,
+                "updated_at": time.time(),
+            })
+    except Exception as e:
+        logger.exception("Error in background ingest task %s", task_id)
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "status": "failed",
+                "error": str(e),
+                "updated_at": time.time(),
+            })
+
+
+async def run_upload_ingest_task(
+    task_id: str,
+    user_id: str,
+    filename: str,
+    content_str: str,
+    title: str,
+    source_dir: str | None,
+):
+    def progress_callback(stage: str, progress: int):
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "stage": stage,
+                "progress": progress,
+                "updated_at": time.time(),
+            })
+
+    try:
+        ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt")
+        if ext == "md":
+            doc = await ingest_markdown_file(
+                user_id=user_id,
+                filename=filename,
+                content=content_str,
+                title=title,
+                source_dir=source_dir,
+                progress_callback=progress_callback,
+            )
+        else:
+            progress_callback("embedding", 50)
+            doc = await ingest_text(user_id, content_str, title)
+            progress_callback("done", 100)
+        
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "status": "completed",
+                "stage": "done",
+                "progress": 100,
+                "result": doc,
+                "updated_at": time.time(),
+            })
+    except Exception as e:
+        logger.exception("Error in background upload task %s", task_id)
+        if task_id in ingestion_tasks:
+            ingestion_tasks[task_id].update({
+                "status": "failed",
+                "error": str(e),
+                "updated_at": time.time(),
+            })
 
 
 class SearchRequest(BaseModel):
@@ -63,10 +156,21 @@ async def search_docs(req: SearchRequest, user: dict = Depends(get_current_user)
     return {"query": req.query, "results": results}
 
 
+# ─── Task Status API ────────────────────────────────────────
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
+    task = ingestion_tasks.get(task_id)
+    if not task or task.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
 # ─── Upload ─────────────────────────────────────────────────
 
-@router.post("/upload")
+@router.post("/upload", status_code=202)
 async def upload_file(
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     file: UploadFile = File(...),
     title: str = Form(""),
@@ -80,6 +184,7 @@ async def upload_file(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
+    cleanup_tasks()
     ext = (file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "txt")
 
     content = await file.read()
@@ -88,17 +193,29 @@ async def upload_file(
     except UnicodeDecodeError:
         text = content.decode("utf-8", errors="replace")
 
-    if ext == "md":
-        doc = await ingest_markdown_file(
-            user_id=user["id"],
-            filename=file.filename,
-            content=text,
-            title=title or file.filename,
-            source_dir=source_dir or None,
-        )
-    else:
-        doc = await ingest_text(user["id"], text, title or file.filename)
-    return doc
+    task_id = str(uuid.uuid4())
+    ingestion_tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user["id"],
+        "status": "processing",
+        "stage": "parsing",
+        "progress": 0,
+        "result": None,
+        "error": None,
+        "updated_at": time.time(),
+    }
+
+    background_tasks.add_task(
+        run_upload_ingest_task,
+        task_id=task_id,
+        user_id=user["id"],
+        filename=file.filename,
+        content_str=text,
+        title=title or file.filename,
+        source_dir=source_dir or None,
+    )
+
+    return {"task_id": task_id, "status": "processing"}
 
 
 class IngestPathRequest(BaseModel):
@@ -106,32 +223,62 @@ class IngestPathRequest(BaseModel):
     title: str = ""
 
 
-@router.post("/ingest-path")
-async def ingest_by_path(req: IngestPathRequest, user: dict = Depends(get_current_user)):
+@router.post("/ingest-path", status_code=202)
+async def ingest_by_path(
+    req: IngestPathRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user)
+):
     """Ingest a file from a local path. Auto-resolves source_dir for images."""
     if not req.filepath.strip():
         raise HTTPException(status_code=400, detail="Filepath is empty")
 
+    cleanup_tasks()
+    target_path = os.path.abspath(req.filepath.strip())
+
     # Dedup: check if this user already ingested this exact filepath
     existing = await get_documents(user["id"])
-    import os
-    target_path = os.path.abspath(req.filepath.strip())
     for doc in existing:
         # Compare by filename + title (title is stem from path)
         from pathlib import Path
         expected_title = req.title or Path(target_path).stem
         if doc["title"] == expected_title and doc["filename"].endswith(Path(target_path).suffix):
-            # Already exists — skip duplicate
+            # Already exists — return a completed task
             logger.info("Duplicate ingest skipped: %s (existing doc_id=%s)", target_path, doc["id"])
-            return doc
+            task_id = str(uuid.uuid4())
+            ingestion_tasks[task_id] = {
+                "task_id": task_id,
+                "user_id": user["id"],
+                "status": "completed",
+                "stage": "done",
+                "progress": 100,
+                "result": doc,
+                "error": None,
+                "updated_at": time.time(),
+            }
+            return {"task_id": task_id, "status": "completed"}
 
-    try:
-        doc = await ingest_file(user["id"], req.filepath, req.title)
-        return doc
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    task_id = str(uuid.uuid4())
+    ingestion_tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user["id"],
+        "status": "processing",
+        "stage": "parsing",
+        "progress": 0,
+        "result": None,
+        "error": None,
+        "updated_at": time.time(),
+    }
+
+    background_tasks.add_task(
+        run_ingest_path_task,
+        task_id=task_id,
+        user_id=user["id"],
+        filepath=target_path,
+        title=req.title,
+    )
+
+    return {"task_id": task_id, "status": "processing"}
 
 
 @router.post("/select-file")

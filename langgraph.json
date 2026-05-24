@@ -11,6 +11,24 @@
   },
   "env": ".env",
   "watch": {
-    "exclude": ["cloud_deploy/**"]
+    "exclude": [
+      "cloud_deploy",
+      "cloud_deploy/**",
+      ".langgraph_api",
+      ".langgraph_api/**",
+      "**/.langgraph_api/**",
+      "agent.db*",
+      "todos.db*",
+      "**/*.db*",
+      "chroma_db",
+      "chroma_db/**",
+      "uploads",
+      "uploads/**",
+      "logs",
+      "logs/**",
+      "data",
+      "data/**",
+      "summary_eval.log"
+    ]
   }
 }
