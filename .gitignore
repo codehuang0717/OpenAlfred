@@ -11,18 +11,19 @@ __pycache__/
 dist/
 build/
 
+# Logs
+logs/
+*.log
+
 # LangGraph persistence
 .langgraph_api/
 
 # Local data & assets
-# assets/
 agent_chrome_profile/
 src/body/windows_system/eye/data/
-logs/
 
 # Testing
 tests/test_supervisor.py
-logs/
 src/logic/__pycache__/
 src/logic/nodes.py
 data/
