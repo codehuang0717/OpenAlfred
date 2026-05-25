@@ -20,6 +20,7 @@ logs/
 
 # Local data & assets
 agent_chrome_profile/
+cloud_deploy/
 src/body/windows_system/eye/data/
 
 # Testing
