@@ -157,6 +157,26 @@ async def set_user_bark_url(user_id: str, bark_url: str):
     logger.info(f"[set_user_bark_url] user_id={user_id}")
 
 
+async def get_onboarding_seen(user_id: str) -> bool:
+    """Check if the user has seen/dismissed the onboarding tutorial prompt."""
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT onboarding_seen FROM users WHERE id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row and row[0])
+
+
+async def set_onboarding_seen(user_id: str, seen: bool = True):
+    """Mark the user as having seen/dismissed the onboarding tutorial prompt."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET onboarding_seen = ? WHERE id = ?",
+            (1 if seen else 0, user_id),
+        )
+        await db.commit()
+
+
 async def get_active_user() -> Optional[dict]:
     """Retrieve the user who logged in most recently."""
     async with get_db() as db:

@@ -42,6 +42,8 @@ from db.user import (
     get_active_user,
     get_user_bark_url,
     set_user_bark_url,
+    get_onboarding_seen,
+    set_onboarding_seen,
 )
 
 from db.settings import set_setting, get_setting

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from PIL import Image
 
-from core.database import get_setting, set_setting, get_user_bark_url, set_user_bark_url
+from core.database import get_setting, set_setting, get_user_bark_url, set_user_bark_url, get_onboarding_seen, set_onboarding_seen
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -226,3 +226,21 @@ async def test_notify(user: dict = Depends(get_current_user)):
         return {"status": "ok", "message": "测试通知已发送"}
     else:
         raise HTTPException(status_code=502, detail="Bark 服务不可达，请检查 URL 是否正确")
+
+
+class OnboardingRequest(BaseModel):
+    seen: bool = True
+
+
+@router.get("/onboarding")
+async def get_onboarding_status(user: dict = Depends(get_current_user)):
+    """Check if the current user has seen the onboarding tutorial prompt."""
+    seen = await get_onboarding_seen(user["id"])
+    return {"seen": seen}
+
+
+@router.post("/onboarding")
+async def set_onboarding_status(data: OnboardingRequest, user: dict = Depends(get_current_user)):
+    """Mark the current user as having seen/dismissed the onboarding tutorial prompt."""
+    await set_onboarding_seen(user["id"], data.seen)
+    return {"status": "updated", "seen": data.seen}

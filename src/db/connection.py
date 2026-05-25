@@ -163,6 +163,16 @@ async def init_db():
         except Exception:
             pass
 
+        # Migration: add onboarding_seen for new-user tutorial prompt
+        try:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN onboarding_seen INTEGER DEFAULT 0"
+            )
+            # Existing users don't need the onboarding popup
+            await db.execute("UPDATE users SET onboarding_seen = 1")
+        except Exception:
+            pass
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS email_credentials (
                 account_id TEXT PRIMARY KEY,
