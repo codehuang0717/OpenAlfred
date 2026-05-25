@@ -15,7 +15,7 @@ build/
 .langgraph_api/
 
 # Local data & assets
-assets/
+# assets/
 agent_chrome_profile/
 src/body/windows_system/eye/data/
 logs/
@@ -28,3 +28,8 @@ src/logic/nodes.py
 data/
 src/core/
 chroma_db/
+
+assets/audio_cache/
+assets/custom_samples
+assets/models
+assests/transitions
