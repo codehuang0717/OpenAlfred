@@ -110,6 +110,16 @@ async def get_models():
             "description": f"DeepSeek Pro ({config.DEEPSEEK_PRO_MODEL})"
         })
 
+    # Xiaomi MiMo (OpenAI-compatible)
+    if config.MIMO_API_KEY:
+        models.append({
+            "id": "mimo",
+            "name": config.MIMO_CHAT_MODEL,
+            "provider": "Xiaomi",
+            "icon": "sparkles",
+            "description": f"Xiaomi MiMo ({config.MIMO_CHAT_MODEL})"
+        })
+
     # Local Ollama
     models.append({
         "id": "gemma-local",

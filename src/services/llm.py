@@ -11,6 +11,7 @@ _bound_cache: dict[tuple, BaseChatModel] = {}
 
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 
 def _create_gpt_model() -> BaseChatModel:
@@ -71,6 +72,17 @@ def _create_gemini_model() -> BaseChatModel:
         return _create_gpt_model()
 
 
+def _create_mimo_model() -> BaseChatModel:
+    if not config.MIMO_API_KEY:
+        logger.warning("MIMO_API_KEY not set, falling back to GPT")
+        return _create_gpt_model()
+    return ChatOpenAI(
+        model=config.MIMO_CHAT_MODEL,
+        base_url=MIMO_BASE_URL,
+        api_key=config.MIMO_API_KEY,
+    )
+
+
 def _create_ollama_model() -> BaseChatModel:
     try:
         from langchain_ollama import ChatOllama
@@ -90,6 +102,7 @@ _factories = {
     "gemma-local": _create_ollama_model,
     "deepseek": _create_deepseek_model,
     "deepseek-pro": _create_deepseek_pro_model,
+    "mimo": _create_mimo_model,
 }
 
 
