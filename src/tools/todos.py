@@ -26,8 +26,7 @@ async def _get_user_id(runtime: ToolRuntime) -> str:
         if isinstance(auth_user, dict) and "identity" in auth_user:
             return auth_user["identity"]
             
-        # 2. Direct configurable fields (Voice Agent Explicit Injection)
-        if "user_id" in conf: return conf["user_id"]
+        # 2. Trusted service/voice ownership fields
         if "owner" in conf: return conf["owner"]
         if "thread_owner" in conf: return conf["thread_owner"]
 
@@ -220,6 +219,7 @@ async def update_todo(
 
     await db_update_todo(
         id=id,
+        user_id=user_id,
         title=title,
         description=description,
         emoji=emoji,
@@ -246,7 +246,7 @@ async def update_todo(
 async def delete_todo(runtime: ToolRuntime, id: str) -> Command:
     """Delete a todo by ID."""
     user_id = await _get_user_id(runtime)
-    await db_delete_todo(id)
+    await db_delete_todo(id, user_id=user_id)
 
     return Command(
         update={

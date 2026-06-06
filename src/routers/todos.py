@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.database import (
@@ -35,8 +35,9 @@ async def update_todo_api(
     user: dict = Depends(get_current_user),
 ):
     """Update a todo by ID."""
-    await db_update_todo(
+    updated = await db_update_todo(
         id=todo_id,
+        user_id=user["id"],
         title=req.title,
         description=req.description,
         emoji=req.emoji,
@@ -45,6 +46,8 @@ async def update_todo_api(
         expected_completion_at=req.expected_completion_at,
         scheduled_start_at=req.scheduled_start_at,
     )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Todo not found")
     return {"status": "updated"}
 
 
@@ -54,5 +57,7 @@ async def delete_todo_api(
     user: dict = Depends(get_current_user),
 ):
     """Delete a todo by ID."""
-    await db_delete_todo(todo_id)
+    deleted = await db_delete_todo(todo_id, user_id=user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Todo not found")
     return {"status": "deleted"}

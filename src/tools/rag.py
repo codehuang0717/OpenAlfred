@@ -1,6 +1,6 @@
 import re
 import json
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from rag.retriever import search as rag_search
 from db.rag import get_documents as db_list_documents
 from db.rag import get_image_by_id, get_document_by_id
@@ -37,11 +37,11 @@ async def _resolve_content(text: str) -> str:
 
 
 @tool
-async def search_knowledge(query: str, top_k: int = 5) -> str:
+async def search_knowledge(runtime: ToolRuntime, query: str, top_k: int = 5) -> str:
     """Search the user's personal knowledge base for documents relevant to the query.
     Use this when the user asks about information that might be in their uploaded documents.
     Returns the most relevant text chunks with source filenames and images."""
-    user_id = _get_rag_user_id()
+    user_id = _get_rag_user_id(runtime)
     if not user_id:
         return "Error: No user context available for knowledge search."
 
@@ -78,10 +78,10 @@ async def search_knowledge(query: str, top_k: int = 5) -> str:
 
 
 @tool
-async def list_knowledge(query: str = "") -> str:
+async def list_knowledge(runtime: ToolRuntime, query: str = "") -> str:
     """List all documents in the user's personal knowledge base.
     Use this to show the user what documents they have uploaded."""
-    user_id = _get_rag_user_id()
+    user_id = _get_rag_user_id(runtime)
     if not user_id:
         return "Error: No user context available."
 
@@ -100,18 +100,27 @@ async def list_knowledge(query: str = "") -> str:
     return "\n".join(lines)
 
 
-def _get_rag_user_id() -> str:
-    """Get user_id from context var or fallback global."""
-    uid = _current_user_id.get()
-    if uid:
-        return uid
-    return _user_id
+def _get_rag_user_id(runtime: ToolRuntime) -> str:
+    """Get user_id from LangGraph auth/runtime context."""
+    if hasattr(runtime, "config") and runtime.config:
+        conf = runtime.config.get("configurable", {})
+        auth_user = conf.get("langgraph_auth_user", {})
+        if isinstance(auth_user, dict) and "identity" in auth_user:
+            return auth_user["identity"]
 
+        metadata = runtime.config.get("metadata", {})
+        if "owner" in metadata:
+            return metadata["owner"]
+        if "owner" in conf:
+            return conf["owner"]
+        if "thread_owner" in conf:
+            return conf["thread_owner"]
 
-# Context variable for passing user_id to tools
-import contextvars
-_current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("rag_user_id", default="")
-_user_id = ""  # fallback global for when context var doesn't propagate
+    if hasattr(runtime, "state") and runtime.state:
+        if isinstance(runtime.state, dict):
+            return runtime.state.get("user_id", "")
+        return getattr(runtime.state, "user_id", "")
+    return ""
 
 
 rag_tools = [search_knowledge, list_knowledge]

@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.database import (
@@ -31,12 +31,15 @@ async def update_reminder_api(
     user: dict = Depends(get_current_user),
 ):
     """Update a reminder by ID."""
-    await db_update_reminder(
+    updated = await db_update_reminder(
         id=reminder_id,
+        user_id=user["id"],
         scheduled_at=req.scheduled_at,
         title=req.title,
         body=req.body,
     )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Reminder not found")
     return {"status": "updated"}
 
 
@@ -46,5 +49,7 @@ async def delete_reminder_api(
     user: dict = Depends(get_current_user),
 ):
     """Delete a reminder by ID."""
-    await db_delete_reminder(reminder_id)
+    deleted = await db_delete_reminder(reminder_id, user_id=user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Reminder not found")
     return {"status": "deleted"}

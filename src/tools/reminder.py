@@ -264,6 +264,7 @@ async def update_reminder(
 
         await db_update_reminder(
             id=id,
+            user_id=user_id,
             scheduled_at=final_time_utc,
             title=title,
             body=body
@@ -296,7 +297,7 @@ async def cancel_reminder(runtime: ToolRuntime, id: str) -> Command:
                 return Command(update={"messages": [ToolMessage(content="ERROR: 未找到匹配的提醒。", tool_call_id=runtime.tool_call_id)]})
             id = matches[0]['id']
             
-        await db_delete_reminder(id)
+        await db_delete_reminder(id, user_id=user_id)
         return Command(
             update={
                 "reminders": await get_all_reminders(user_id=user_id),

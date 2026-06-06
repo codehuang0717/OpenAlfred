@@ -42,8 +42,7 @@ async def _get_user_id(runtime: ToolRuntime) -> str:
         if isinstance(auth_user, dict) and "identity" in auth_user:
             return auth_user["identity"]
             
-        # 2. Direct configurable fields
-        if "user_id" in conf: return conf["user_id"]
+        # 2. Trusted service/voice ownership fields
         if "owner" in conf: return conf["owner"]
         if "thread_owner" in conf: return conf["thread_owner"]
 

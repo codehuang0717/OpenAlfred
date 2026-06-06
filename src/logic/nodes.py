@@ -30,8 +30,6 @@ def _get_user_id_from_config(config) -> str:
             return conf["owner"]
         if "thread_owner" in conf:
             return conf["thread_owner"]
-        if "user_id" in conf:
-            return conf["user_id"]
     return "default"
 
 
@@ -64,11 +62,6 @@ async def load_context_node(state: AgentState, config):
         f"(resolved={resolved} state_uid={state.user_id})"
     )
 
-    # Set RAG user_id for tool calls
-    import tools.rag as rag_tools_mod
-    rag_tools_mod._current_user_id.set(user_id)
-    rag_tools_mod._user_id = user_id  # fallback global
-
     l1_memories = memory_manager.build_injection_text(user_id)
 
     context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
@@ -94,15 +87,6 @@ async def agent_node(state: AgentState, config):
     # model_selection priority: config.configurable > state > default
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
     model_selection = conf.get("model_selection") or state.model_selection or "gpt-cloud"
-
-    # Ensure RAG user_id is available for tool calls.
-    # Using a module-level variable because contextvars may not
-    # propagate into LangGraph's ToolNode task.
-    import tools.rag as rag_tools_mod
-    uid = state.user_id or _get_user_id_from_config(config)
-    if uid:
-        rag_tools_mod._current_user_id.set(uid)
-        rag_tools_mod._user_id = uid  # fallback global
 
     # ── Error mapping helper ──
     def _map_llm_error(e: Exception) -> str:

@@ -8,7 +8,7 @@ from typing import Optional
 import bcrypt
 import jwt
 from PIL import Image
-from fastapi import APIRouter, HTTPException, Depends, Header, Query, status, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Header, Query, Cookie, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -157,7 +157,8 @@ def verify_jwt_token(token: str) -> dict:
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    token: Optional[str] = Query(None)
+    token: Optional[str] = Query(None),
+    token_cookie: Optional[str] = Cookie(None, alias="token"),
 ) -> dict:
     """FastAPI dependency: extract and verify the current user from JWT."""
     jwt_token = None
@@ -166,6 +167,8 @@ async def get_current_user(
         jwt_token = credentials.credentials
     elif token:
         jwt_token = token
+    elif token_cookie:
+        jwt_token = token_cookie
         
     if not jwt_token:
         raise HTTPException(

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import os
 import uuid
 import time
+from pathlib import Path
 
 from routers.auth import get_current_user
 from db.rag import get_documents, get_document_by_id
@@ -319,8 +320,17 @@ async def ingest_text_api(req: IngestTextRequest, user: dict = Depends(get_curre
 # ─── Image Serving (public) ─────────────────────────────────
 
 @images_router.get("/{doc_id}/{filename}")
-async def serve_image(doc_id: str, filename: str):
-    path = IMAGES_DIR / doc_id / filename
-    if not path.exists():
+async def serve_image(doc_id: str, filename: str, user: dict = Depends(get_current_user)):
+    doc = await get_document_by_id(doc_id)
+    if not doc or doc["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    safe_filename = Path(filename).name
+    if safe_filename != filename:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    path = (IMAGES_DIR / doc_id / safe_filename).resolve()
+    image_dir = (IMAGES_DIR / doc_id).resolve()
+    if image_dir not in path.parents or not path.is_file():
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(str(path))

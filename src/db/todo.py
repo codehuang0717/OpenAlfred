@@ -61,6 +61,7 @@ async def add_todo(
 
 async def update_todo(
     id: str,
+    user_id: str = "default",
     title: Optional[str] = None,
     description: Optional[str] = None,
     emoji: Optional[str] = None,
@@ -102,15 +103,19 @@ async def update_todo(
     if not updates:
         return
 
-    params.append(id)
+    params.extend([id, user_id])
     async with get_db() as db:
-        await db.execute(
-            f"UPDATE todos SET {', '.join(updates)} WHERE id = ?",
+        cursor = await db.execute(
+            f"UPDATE todos SET {', '.join(updates)} WHERE id = ? AND user_id = ? AND deleted = 0",
             params,
         )
         await db.commit()
+        updated = cursor.rowcount > 0
 
-    await event_bus.publish(EventType.TODO_UPDATED, {"id": id})
+    if not updated:
+        return False
+
+    await event_bus.publish(EventType.TODO_UPDATED, {"id": id, "user_id": user_id})
 
     if scheduled_start_at is not None:
         await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
@@ -119,25 +124,37 @@ async def update_todo(
             
     if status == "completed":
         await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
+    return True
 
 
-async def delete_todo(id: str):
+async def delete_todo(id: str, user_id: str = "default") -> bool:
     async with get_db() as db:
-        await db.execute(
-            "UPDATE todos SET deleted = 1 WHERE id = ?",
-            (id,),
+        cursor = await db.execute(
+            "UPDATE todos SET deleted = 1 WHERE id = ? AND user_id = ? AND deleted = 0",
+            (id, user_id),
         )
         await db.commit()
+        deleted = cursor.rowcount > 0
+
+    if not deleted:
+        return False
     
-    await event_bus.publish(EventType.TODO_DELETED, {"id": id})
+    await event_bus.publish(EventType.TODO_DELETED, {"id": id, "user_id": user_id})
     await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
+    return True
 
 
-async def get_todo_by_id(id: str):
+async def get_todo_by_id(id: str, user_id: Optional[str] = None):
+    sql = "SELECT * FROM todos WHERE id = ? AND deleted = 0"
+    params = [id]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+
     async with get_db() as db:
         async with db.execute(
-            "SELECT * FROM todos WHERE id = ? AND deleted = 0",
-            (id,),
+            sql,
+            params,
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
