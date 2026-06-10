@@ -7,6 +7,7 @@ from tools.email_tools import email_tools
 from tools.search import search_tools
 from tools.screenshot import screenshot_tools
 from tools.rag import rag_tools
+from tools.weather import weather_tools
 
 import logging
 
@@ -21,7 +22,8 @@ _BUILTIN_TOOLS: list = (
     screen_tools +
     search_tools +
     screenshot_tools +
-    rag_tools
+    rag_tools +
+    weather_tools
 )
 
 _import_logger.debug(

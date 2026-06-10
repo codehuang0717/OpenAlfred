@@ -9,6 +9,12 @@ from PIL import Image
 
 from core.database import get_setting, set_setting, get_user_bark_url, set_user_bark_url, get_onboarding_seen, set_onboarding_seen
 from routers.auth import get_current_user
+from services.weather import (
+    clear_weather_location,
+    get_saved_weather_location,
+    get_weather_summary,
+    save_weather_location,
+)
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -193,6 +199,14 @@ class NotifyConfigRequest(BaseModel):
     bark_url: str = ""
 
 
+class WeatherLocationRequest(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+    label: str = "当前位置"
+    source: str = "browser"
+
+
 @router.get("/notify/config")
 async def get_notify_config(user: dict = Depends(get_current_user)):
     """Get the current user's push notification configuration."""
@@ -236,6 +250,51 @@ async def test_notify(user: dict = Depends(get_current_user)):
         return {"status": "ok", "message": "测试通知已发送"}
     else:
         raise HTTPException(status_code=502, detail="Bark 服务不可达，请检查 URL 是否正确")
+
+
+@router.get("/weather/location")
+async def get_weather_location(user: dict = Depends(get_current_user)):
+    """Get the current user's default weather location."""
+    return {"location": await get_saved_weather_location(user["id"])}
+
+
+@router.post("/weather/location")
+async def set_weather_location(data: WeatherLocationRequest, user: dict = Depends(get_current_user)):
+    """Save the current user's default weather location."""
+    if not -90 <= data.latitude <= 90:
+        raise HTTPException(status_code=400, detail="纬度必须在 -90 到 90 之间")
+    if not -180 <= data.longitude <= 180:
+        raise HTTPException(status_code=400, detail="经度必须在 -180 到 180 之间")
+
+    payload = {
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "accuracy": data.accuracy,
+        "label": data.label.strip() or "当前位置",
+        "source": data.source.strip() or "browser",
+    }
+    saved = await save_weather_location(user["id"], payload)
+    return {"status": "updated", "location": saved}
+
+
+@router.delete("/weather/location")
+async def delete_weather_location(user: dict = Depends(get_current_user)):
+    """Clear the current user's default weather location."""
+    await clear_weather_location(user["id"])
+    return {"status": "deleted"}
+
+
+@router.get("/weather/current")
+async def get_current_weather(user: dict = Depends(get_current_user)):
+    """Get the current user's saved-location weather summary."""
+    try:
+        summary = await get_weather_summary(user_id=user["id"])
+    except Exception as e:
+        logger.warning("weather/current failed: %s", e)
+        raise HTTPException(status_code=502, detail="天气服务暂时不可用")
+    if not summary:
+        return {"weather": None, "needs_location": True}
+    return {"weather": summary, "needs_location": False}
 
 
 class OnboardingRequest(BaseModel):

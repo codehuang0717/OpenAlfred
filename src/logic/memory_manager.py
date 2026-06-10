@@ -2,8 +2,9 @@
 L1 Local Memory Manager — manages per-user markdown files under memory/{user_id}/.
 
 Files: profile.md, preferences.md, relationship.md, learned_patterns.md
-Each file is injected into the system prompt every turn. The LLM can read/write
-these files via get_user_profile / update_user_memory tools.
+Only profile.md and preferences.md are injected into the system prompt every
+turn. Relationship and behavioral pattern memories stay available through
+tools and are loaded on demand.
 """
 
 import re
@@ -17,6 +18,7 @@ from core.config import config
 logger = logging.getLogger("memory-manager")
 
 ALL_L1_FILES = ["profile.md", "preferences.md", "relationship.md", "learned_patterns.md"]
+DEFAULT_INJECTED_FILES = ["profile.md", "preferences.md"]
 COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -53,12 +55,14 @@ class MemoryManager:
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def load_all_memories(self, user_id: str) -> str:
-        """Load and format all L1 files. Returns '' if empty."""
+    def load_memories(self, user_id: str, filenames: Optional[list[str]] = None) -> str:
+        """Load and format selected L1 files. Returns '' if empty."""
         self._ensure_user_dir(user_id)
         user_dir = self._user_dir(user_id)
         parts: list[str] = []
-        for fname in ALL_L1_FILES:
+        for fname in filenames or ALL_L1_FILES:
+            if fname not in ALL_L1_FILES:
+                continue
             content = self._read_file(user_dir / fname)
             content = self._strip_comments(content).strip()
             if content:
@@ -73,6 +77,10 @@ class MemoryManager:
                     parts.append(f"## {title}\n{body}")
         return "\n\n".join(parts) if parts else ""
 
+    def load_all_memories(self, user_id: str) -> str:
+        """Load and format all L1 files. Returns '' if empty."""
+        return self.load_memories(user_id, ALL_L1_FILES)
+
     def append_to_memory_file(self, user_id: str, filename: str, text: str):
         """Append a timestamped line to a memory file."""
         self._ensure_user_dir(user_id)
@@ -82,8 +90,8 @@ class MemoryManager:
         path.write_text(new_content, encoding="utf-8")
 
     def build_injection_text(self, user_id: str) -> str:
-        """Format memories for system prompt injection."""
-        memories = self.load_all_memories(user_id)
+        """Format only core profile/preferences memories for prompt injection."""
+        memories = self.load_memories(user_id, DEFAULT_INJECTED_FILES)
         return f"[用户长期记忆]\n---\n{memories}\n---" if memories else ""
 
 

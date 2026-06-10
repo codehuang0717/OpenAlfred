@@ -11,6 +11,7 @@ from core.database import get_thread_memory, set_thread_memory
 from logic.context_manager import ContextManager
 from logic.memory_manager import memory_manager
 from core.config import config as app_config
+from services.weather import format_weather_prompt_context, get_weather_summary
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
@@ -63,8 +64,17 @@ async def load_context_node(state: AgentState, config):
     )
 
     l1_memories = memory_manager.build_injection_text(user_id)
+    weather_context = ""
+    try:
+        weather_context = format_weather_prompt_context(
+            await get_weather_summary(user_id=user_id)
+        )
+    except Exception as e:
+        logger.debug("[load_context] weather context skipped: %s", e)
 
     context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
+    if weather_context:
+        context += f"\n\n{weather_context}"
     if l1_memories:
         context += f"\n\n{l1_memories}"
     if summary:
