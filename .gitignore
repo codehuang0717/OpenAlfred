@@ -26,15 +26,10 @@ src/body/windows_system/eye/data/
 # Testing
 tests/test_supervisor.py
 src/logic/__pycache__/
-src/logic/nodes.py
 data/
 src/core/
 chroma_db/
 
 assets/audio_cache/
 assets/custom_samples
-assets/models
-assests/transitions
-assets/transitions/
-assets/sounds/
 src/core/__pycache__/
