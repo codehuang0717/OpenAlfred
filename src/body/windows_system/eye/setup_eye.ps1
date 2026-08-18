@@ -21,7 +21,32 @@ function Setup-Eye {
 }
 
 function Start-Eye {
-    $DataDir = Join-Path $Root "data"
+    $AgentRoot = Resolve-Path (Join-Path $Root "..\..\..\..")
+    $DataDir = Join-Path $AgentRoot "data\screenpipe"
+    $LegacyDataDir = Join-Path $Root "data"
+
+    $NewDb = Join-Path $DataDir "db.sqlite"
+    $LegacyDb = Join-Path $LegacyDataDir "db.sqlite"
+    if ((-not (Test-Path $NewDb)) -and (Test-Path $LegacyDb)) {
+        Write-Host "[Eye] Migrating existing Screenpipe data to $DataDir ..." -ForegroundColor Yellow
+        $ParentDir = Split-Path -Parent $DataDir
+        if (-not (Test-Path $ParentDir)) {
+            New-Item -Path $ParentDir -ItemType Directory -Force | Out-Null
+        }
+        if (Test-Path $DataDir) {
+            $ExistingItems = Get-ChildItem -Path $DataDir -Force -ErrorAction SilentlyContinue
+            if ($ExistingItems.Count -eq 0) {
+                Remove-Item -Path $DataDir -Force
+            }
+        }
+        if (-not (Test-Path $DataDir)) {
+            Move-Item -Path $LegacyDataDir -Destination $DataDir
+            Write-Host "[Eye] Migration complete." -ForegroundColor Green
+        } else {
+            Write-Host "[Eye] New data directory already exists; keeping legacy data in place." -ForegroundColor Yellow
+        }
+    }
+
     if (-not (Test-Path $DataDir)) {
         New-Item -Path $DataDir -ItemType Directory | Out-Null
         Write-Host "[Eye] Created local data directory at $DataDir" -ForegroundColor Gray

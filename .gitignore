@@ -37,3 +37,4 @@ assets/models
 assests/transitions
 assets/transitions/
 assets/sounds/
+src/core/__pycache__/

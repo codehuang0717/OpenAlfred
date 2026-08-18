@@ -201,7 +201,7 @@ async def summarize_node(state: AgentState, config):
         if to_summarize:
             logger.info(f"Summarizing {len(to_summarize)} messages for thread {thread_id}")
             summary_prompt = ctx_manager.build_summary_prompt(to_summarize)
-            llm = get_model("gpt-cloud")
+            llm = get_model(app_config.MEMORY_MODEL_SELECTION)
             result = await llm.ainvoke([HumanMessage(content=summary_prompt)], config={"callbacks": []})
             new_summary = result.content.strip()
             
@@ -297,7 +297,7 @@ async def extract_knowledge_node(state: AgentState, config):
         from utils.structured_output import structured_invoke, StructuredOutputError
         from logic.schema import KnowledgeExtractionResult
 
-        llm = get_model("gpt-cloud")
+        llm = get_model(app_config.MEMORY_MODEL_SELECTION)
         prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(
             existing_memories=existing_block,
             conversation=conversation_text,

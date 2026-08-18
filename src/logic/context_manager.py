@@ -3,7 +3,7 @@ Context Manager — Three-layer memory architecture for conversation management.
 
 Layer 1 (Short-term): Sliding window of recent messages
 Layer 2 (Mid-term): Automatic conversation summarization
-Layer 3 (Long-term): Mem0 cross-session knowledge extraction
+Layer 3 (Long-term): Local L1 markdown memories
 
 This module handles:
 - Trimming old messages to stay within context window limits

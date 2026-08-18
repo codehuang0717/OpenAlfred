@@ -28,6 +28,11 @@
       "logs/**",
       "data",
       "data/**",
+      "**/data/**",
+      "src/body/windows_system/eye/data",
+      "src/body/windows_system/eye/data/**",
+      "**/*.mp4",
+      "**/*.sqlite*",
       "summary_eval.log"
     ]
   }
