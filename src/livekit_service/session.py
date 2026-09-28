@@ -138,40 +138,68 @@ class VoiceSession:
                     )
                 elif event_type == "message":
                     final_resp_text = payload
-                    # Start TTS immediately (prefetch) while transition still plays
-                    if not self.interrupt_event.is_set() and final_resp_text:
-                        t_msg = time.time()
-                        logger.info(f"========> [Agent Response]: {final_resp_text}")
-                        logger.info(f"[TIMING][Session] MESSAGE_ARRIVED | t={t_msg:.3f}")
+                    if self.interrupt_event.is_set() or not final_resp_text:
+                        continue
+                    if self.current_tts_task and not self.current_tts_task.done():
+                        continue
+                    t_msg = time.time()
+                    logger.info(f"========> [Agent Response]: {final_resp_text}")
+                    logger.info(f"[TIMING][Session] MESSAGE_ARRIVED | t={t_msg:.3f}")
+                    latency_tracker.end("agent_response")
+                    latency_tracker.end("end_to_end")
+                    transition_busy = (
+                        self.current_transition_task is not None
+                        and not self.current_transition_task.done()
+                    )
+                    if transition_busy:
                         self.current_tts_task = asyncio.create_task(
-                            play_tts(self.room, final_resp_text, self.should_exit, self.interrupt_event, start_event=tts_start_event)
+                            play_tts(
+                                self.room,
+                                final_resp_text,
+                                self.should_exit,
+                                self.interrupt_event,
+                                start_event=tts_start_event,
+                            )
                         )
-                        logger.info(f"[TIMING][Session] TTS_TASK_CREATED | dt={time.time() - t_msg:.3f}s")
+                    else:
+                        self.current_tts_task = asyncio.create_task(
+                            play_tts(
+                                self.room,
+                                final_resp_text,
+                                self.should_exit,
+                                self.interrupt_event,
+                            )
+                        )
+                    logger.info(f"[TIMING][Session] TTS_TASK_CREATED | dt={time.time() - t_msg:.3f}s")
         finally:
             self.is_agent_processing = False
 
-        latency_tracker.end("agent_response")
-        latency_tracker.end("end_to_end")
+        if "agent_response" in latency_tracker.timings and "end" not in latency_tracker.timings.get("agent_response", {}):
+            latency_tracker.end("agent_response")
+        if "end_to_end" in latency_tracker.timings and "end" not in latency_tracker.timings.get("end_to_end", {}):
+            latency_tracker.end("end_to_end")
 
-        # 3. Wait for transition to finish, then release TTS
+        # 3. Wait for transition to finish, then release deferred TTS
         t_wait_start = time.time()
         if self.current_transition_task and not self.current_transition_task.done():
             logger.info(f"[TIMING][Session] WAIT_TRANSITION_START | t={t_wait_start:.3f}")
             await self.current_transition_task
             logger.info(f"[TIMING][Session] WAIT_TRANSITION_DONE | dt={time.time() - t_wait_start:.3f}s")
         else:
-            logger.info(f"[TIMING][Session] NO_TRANSITION_TO_WAIT | transition_active={self.current_transition_task is not None} | dt=0s")
+            logger.info(
+                f"[TIMING][Session] NO_TRANSITION_TO_WAIT | "
+                f"transition_active={self.current_transition_task is not None} | dt=0s"
+            )
 
         if not self.interrupt_event.is_set() and final_resp_text:
-            t_set = time.time()
             tts_start_event.set()
-            logger.info(f"[TIMING][Session] START_EVENT_SET | t={t_set:.3f}")
-            if not self.current_tts_task:
-                # No tool call — no transition played, start TTS directly
-                logger.info(f"========> [Agent Response]: {final_resp_text}")
-                self.current_tts_task = asyncio.create_task(
-                    play_tts(self.room, final_resp_text, self.should_exit, self.interrupt_event)
-                )
+            logger.info(f"[TIMING][Session] START_EVENT_SET | t={time.time():.3f}")
+
+        if self.current_tts_task and not self.current_tts_task.done():
+            try:
+                await self.current_tts_task
+            except asyncio.CancelledError:
+                logger.info("[TIMING][Session] TTS_TASK_CANCELLED")
 
         self._log_latency_summary()
         latency_tracker.reset()

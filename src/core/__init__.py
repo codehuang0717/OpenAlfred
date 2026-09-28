@@ -1,4 +1,9 @@
+"""Core package.
+
+Import concrete modules directly (for example, ``core.database``). Keeping the
+package initializer side-effect free prevents authentication/config import cycles.
+"""
+
 from .config import config
-from .auth import *
-from .event_bus import event_bus, EventType
-from .database import *
+
+__all__ = ["config"]

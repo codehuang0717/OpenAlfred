@@ -4,6 +4,8 @@ from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from core.config import config
+from services.screen_monitor import require_screen_access
+from utils.auth_utils import require_runtime_user_id
 
 logger = get_logger("eye-tool")
 
@@ -17,6 +19,7 @@ console = Console()
 # ──────────────────────────────────────────────
 
 async def _search_screenpipe(
+    user_id: str,
     q: Optional[str] = None,
     content_type: str = "all",
     start_time: Optional[str] = None,
@@ -37,6 +40,7 @@ async def _search_screenpipe(
     Returns the parsed JSON response dict (with ``data`` and ``pagination`` keys)
     or an error dict with an ``error`` key.
     """
+    await require_screen_access(user_id)
     params: Dict[str, str | int] = {
         "limit": limit,
         "offset": offset,
@@ -63,7 +67,7 @@ async def _search_screenpipe(
         params["speaker_name"] = speaker_name
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.get(
                 f"{config.SCREENPIPE_URL}/search",
                 params=params,
@@ -158,131 +162,35 @@ def _format_pagination(pagination: dict) -> str:
 # Legacy convenience functions (kept for supervisor)
 # ──────────────────────────────────────────────
 
-async def get_enhanced_context(minutes: int = 10) -> str:
-    """Fetch OCR, Audio, and UI context from Screenpipe for a comprehensive user activity view."""
-    try:
-        now_utc = datetime.now(timezone.utc)
-        start_time_dt = now_utc - timedelta(minutes=minutes)
-        start_time_str = start_time_dt.isoformat()
-
-        resp = await _search_screenpipe(
-            content_type="all",
-            start_time=start_time_str,
-            limit=60,
-        )
-        if "error" in resp:
-            return resp["error"]
-
-        items = resp.get("data", [])
-
-        # Process items into structured context
-        ocr_parts = []
-        audio_parts = []
-        input_events = 0
-        apps_active = set()
-        urls_active = set()
-
-        for item in items:
-            content_type = item.get("type", "").upper()
-            content = item.get("content", {})
-
-            if content_type == "OCR":
-                text = content.get("text", "").strip()
-                app = content.get("app_name", "Unknown")
-                window = content.get("window_name", "Unknown")
-                url = content.get("browser_url", "")
-
-                if text:
-                    ocr_parts.append(f"[{app} | {window}] {text[:200]}")
-                    apps_active.add(app)
-                    if url:
-                        urls_active.add(url)
-
-            elif content_type == "AUDIO":
-                text = content.get("transcription", "").strip()
-                if text:
-                    audio_parts.append(text)
-
-            elif content_type == "INPUT":
-                input_events += 1
-
-        # Activity Summary (optional)
-        activity_summary = ""
-        try:
-            async with httpx.AsyncClient() as client:
-                summary_resp = await client.get(
-                    f"{config.SCREENPIPE_URL}/activity/get-activity-summary",
-                    timeout=5.0,
-                )
-                if summary_resp.status_code == 200:
-                    activity_data = summary_resp.json()
-                    if isinstance(activity_data, list):
-                        summary_items = [
-                            f"{a.get('app_name')}: {a.get('duration')}s"
-                            for a in activity_data[:5]
-                        ]
-                        activity_summary = "Recent Apps: " + ", ".join(summary_items)
-        except Exception:
-            pass
-
-        # Construct Final Context String
-        context_blocks = []
-
-        if apps_active:
-            context_blocks.append(f"Active Apps: {', '.join(apps_active)}")
-
-        if urls_active:
-            context_blocks.append(f"Active URLs: {', '.join(urls_active)}")
-
-        context_blocks.append(
-            f"Physical Activity: {'Active' if input_events > 0 else 'Idle'} "
-            f"({input_events} input events detected)"
-        )
-
-        if activity_summary:
-            context_blocks.append(f"Activity Summary: {activity_summary}")
-
-        if ocr_parts:
-            unique_ocr = list(dict.fromkeys(ocr_parts))[:15]
-            context_blocks.append(
-                "--- Screen Content (OCR) ---\n" + "\n".join(unique_ocr)
-            )
-
-        if audio_parts:
-            unique_audio = list(dict.fromkeys(audio_parts))[:10]
-            context_blocks.append(
-                "--- Audio Transcripts (Meetings/Speech) ---\n"
-                + "\n".join(unique_audio)
-            )
-
-        final_context = "\n\n".join(context_blocks)
-
-        console.print(
-            f"[cyan][eye-tool] Fetched enhanced context: "
-            f"{len(ocr_parts)} OCR items, {len(audio_parts)} Audio items.[/cyan]"
-        )
-
-        return final_context if final_context else "No activity detected."
-
-    except Exception as e:
-        logger.error(f"Error connecting to Screenpipe: {e}")
-        return f"Error connecting to Screenpipe: {str(e)}"
+async def get_enhanced_context(user_id: str, minutes: int = 10) -> str:
+    """Read owner-scoped OCR; acquisition errors must not become model input."""
+    start = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    resp = await _search_screenpipe(
+        user_id=user_id, content_type="ocr", start_time=start, limit=60,
+    )
+    if "error" in resp:
+        raise RuntimeError(resp["error"])
+    items = resp.get("data", [])
+    if not items:
+        raise RuntimeError("Screenpipe 在指定时间内没有 OCR 数据，跳过智能分析")
+    return "\n".join(_format_content_item(item) for item in items)
 
 
-async def get_recent_ocr_text(minutes: int = 10) -> str:
+async def get_recent_ocr_text(user_id: str, minutes: int = 10) -> str:
     """Legacy wrapper for backward compatibility."""
-    return await get_enhanced_context(minutes)
+    return await get_enhanced_context(user_id, minutes)
 
 
 # ──────────────────────────────────────────────
 # LangChain tool definitions
 # ──────────────────────────────────────────────
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 
 
 @tool
 async def view_screen(
+    runtime: ToolRuntime,
     mode: Literal["current", "history", "time_range"] = "current",
     query: str = "",
     start_time: str = "",
@@ -307,10 +215,12 @@ async def view_screen(
     with mode='time_range'.
     """
     try:
+        user_id = require_runtime_user_id(runtime)
         if mode == "current":
             now_utc = datetime.now(timezone.utc)
             st = (now_utc - timedelta(minutes=5)).isoformat()
             resp = await _search_screenpipe(
+                user_id=user_id,
                 content_type=content_type,
                 start_time=st,
                 limit=limit,
@@ -320,6 +230,7 @@ async def view_screen(
             if not start_time and not end_time:
                 return "Error: time_range mode requires at least one of start_time or end_time."
             resp = await _search_screenpipe(
+                user_id=user_id,
                 q=query or None,
                 content_type=content_type,
                 start_time=_local_to_utc(start_time) if start_time else None,
@@ -332,6 +243,7 @@ async def view_screen(
             if not query:
                 return "Error: history mode requires a query string."
             resp = await _search_screenpipe(
+                user_id=user_id,
                 q=query,
                 content_type=content_type,
                 limit=limit,
@@ -358,6 +270,7 @@ async def view_screen(
 
 @tool
 async def search_screen_time(
+    runtime: ToolRuntime,
     start_time: str,
     end_time: str = "",
     query: str = "",
@@ -386,6 +299,7 @@ async def search_screen_time(
         limit = min(limit, 100)
 
         resp = await _search_screenpipe(
+            user_id=require_runtime_user_id(runtime),
             q=query or None,
             content_type=content_type,
             start_time=_local_to_utc(start_time),

@@ -22,6 +22,11 @@ from core.database import (
     update_user_password,
 )
 from core.config import config
+from utils.auth_utils import (
+    MissingUserContextError,
+    require_config_value,
+    require_explicit_user_id,
+)
 
 logger = logging.getLogger("auth-router")
 
@@ -135,20 +140,26 @@ class LoginRequest(BaseModel):
 
 def create_jwt_token(user_id: str, username: str) -> str:
     """Create a signed JWT token."""
+    user_id = require_explicit_user_id(user_id)
     payload = {
         "sub": user_id,
         "username": username,
         "exp": datetime.now(timezone.utc) + timedelta(hours=config.JWT_EXPIRATION_HOURS),
         "iat": datetime.now(timezone.utc),
     }
-    return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
+    secret = require_config_value("JWT_SECRET", config.JWT_SECRET)
+    return jwt.encode(payload, secret, algorithm=config.JWT_ALGORITHM)
 
 
 def verify_jwt_token(token: str) -> dict:
     """Decode and verify a JWT token. Raises HTTPException on failure."""
     try:
-        payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+        secret = require_config_value("JWT_SECRET", config.JWT_SECRET)
+        payload = jwt.decode(token, secret, algorithms=[config.JWT_ALGORITHM])
+        payload["sub"] = require_explicit_user_id(payload.get("sub"))
         return payload
+    except MissingUserContextError:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:

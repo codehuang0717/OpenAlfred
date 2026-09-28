@@ -1,37 +1,34 @@
 from utils.logger import get_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import time
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from logic.schema import AgentState
-from services.llm import get_model, get_bound_model
+from services.llm import get_model, get_bound_model, output_limit_kwargs
 from logic.prompts import AGENT_SYSTEM_PROMPT, KNOWLEDGE_EXTRACTION_PROMPT
-from core.database import get_thread_memory, set_thread_memory
 from logic.context_manager import ContextManager
+from logic.context_metrics import model_usage_metrics
+from logic.context_payload import serialize
 from logic.memory_manager import memory_manager
 from core.config import config as app_config
 from services.weather import format_weather_prompt_context, get_weather_summary
+from utils.auth_utils import require_thread_id, require_user_id
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
 
-def _get_user_id_from_config(config) -> str:
-    """Extract user_id from LangGraph config."""
+def _is_voice_channel(config) -> bool:
+    """Voice runs set configurable.channel=voice; metadata.type=call is a fallback."""
     if isinstance(config, dict):
-        conf = config.get("configurable", {})
-        auth_user = conf.get("langgraph_auth_user", {})
-        if isinstance(auth_user, dict) and "identity" in auth_user:
-            return auth_user["identity"]
-        metadata = config.get("metadata", {})
-        if "owner" in metadata:
-            return metadata["owner"]
-        # Voice agent passes "owner" in configurable, not "thread_owner"
-        if "owner" in conf:
-            return conf["owner"]
-        if "thread_owner" in conf:
-            return conf["thread_owner"]
-    return "default"
+        conf = config.get("configurable", {}) or {}
+        if conf.get("channel") == "voice":
+            return True
+        metadata = config.get("metadata", {}) or {}
+        return metadata.get("type") == "call"
+    metadata = getattr(config, "metadata", {}) or {}
+    return metadata.get("type") == "call"
 
 
 async def load_context_node(state: AgentState, config):
@@ -39,28 +36,19 @@ async def load_context_node(state: AgentState, config):
     Node to inject dynamic context (time, summary, L1 memories) into the message list.
     """
     # 1. Get current time
-    now_uk = datetime.now(ZoneInfo("Europe/London"))
+    now_uk = datetime.now(ZoneInfo(app_config.TIMEZONE))
     time_str = now_uk.strftime("%Y-%m-%d %H:%M:%S")
     weekday = now_uk.strftime("%A")
 
-    # 2. Get Thread Memory (Summary) from DB if not already in state
-    thread_id = config.get("configurable", {}).get("thread_id", "default_thread")
-    summary = state.conversation_summary
-    summarized_count = state.summarized_count
+    # Legacy append-only summaries are not injected. The budget planner loads
+    # a versioned, owner-scoped rolling summary immediately before each model call.
+    require_thread_id(config)
 
-    if not summary:
-        summary, summarized_count = await get_thread_memory(thread_id)
-
-    # 3. Resolve user_id: always prefer JWT/auth identity over cached state
-    resolved = _get_user_id_from_config(config)
-    if resolved != "default":
-        user_id = resolved
-    else:
-        # Fallback: use state value (e.g. voice calls where auth may not fire)
-        user_id = state.user_id or "default"
+    # 3. Resolve user_id from authenticated request metadata. Fail closed when
+    # ownership is missing or conflicting; cached graph state is not authority.
+    user_id = require_user_id(config)
     logger.debug(
-        f"[load_context] user_id={user_id} "
-        f"(resolved={resolved} state_uid={state.user_id})"
+        f"[load_context] user_id={user_id} state_uid={state.user_id}"
     )
 
     l1_memories = memory_manager.build_injection_text(user_id)
@@ -72,18 +60,12 @@ async def load_context_node(state: AgentState, config):
     except Exception as e:
         logger.debug("[load_context] weather context skipped: %s", e)
 
-    context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: Europe/London."
+    context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: {app_config.TIMEZONE}."
     if weather_context:
         context += f"\n\n{weather_context}"
-    if l1_memories:
-        context += f"\n\n{l1_memories}"
-    if summary:
-        context += f"\n\n[对话历史摘要]\n{summary}"
-
     return {
-        "system_instruction": f"{AGENT_SYSTEM_PROMPT}\n\n{context}",
-        "conversation_summary": summary,
-        "summarized_count": summarized_count,
+        "system_instruction": f"{AGENT_SYSTEM_PROMPT}\n\n{l1_memories}" if l1_memories else AGENT_SYSTEM_PROMPT,
+        "runtime_context": context,
         "user_id": user_id,
     }
 
@@ -93,6 +75,8 @@ async def agent_node(state: AgentState, config):
     Binds all tools by default. Excludes browser tasks for voice calls.
     """
     from tools import ALL_TOOLS
+    if state.context_error:
+        return {"messages": [AIMessage(content=f"上下文准备失败：{state.context_error}。已停止后续主模型调用，请检查配置或拆分输入后重试。") ]}
     
     # model_selection priority: config.configurable > state > default
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
@@ -134,235 +118,96 @@ async def agent_node(state: AgentState, config):
         return f"{name}：{brief[:200]}"
 
     # ── Tool Selection ──
-    # Check if this is a voice call scenario
-    metadata = config.get("metadata", {}) if isinstance(config, dict) else getattr(config, "metadata", {})
-    is_voice = metadata.get("type") == "call"
-    
-    if is_voice:
-        # Slim tool set for lower latency: exclude browser, outbound call, and UI-oriented email tools
-        voice_exclude = {"make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"}
-        selected_tools = [t for t in ALL_TOOLS if t.name not in voice_exclude]
-        logger.info(f"[AgentNode] Voice call detected. Binding {len(selected_tools)}/{len(ALL_TOOLS)} tools (excluded: {voice_exclude}).")
-    else:
-        selected_tools = list(ALL_TOOLS)
-        logger.info(f"[AgentNode] Text chat detected. Binding all {len(selected_tools)} tools.")
+    selected_tools = selected_context_tools(config)
     
     # Bind tools to the model (cached by model + tool set)
     tool_names = frozenset(t.name for t in selected_tools)
     llm = get_bound_model(model_selection, tool_names, ALL_TOOLS)
     
-    # Construction of the dynamic prompt:
-    # 1. Prepend the transient system instruction (with current time/summary)
-    # 2. Add the truncated message history
-    system_msg = SystemMessage(content=state.system_instruction)
-    
-    raw_messages = state.messages
-    # Robust sliding window: Take the last N messages
-    if len(raw_messages) > ctx_manager.max_messages:
-        recent_history = raw_messages[-ctx_manager.max_messages:]
-    else:
-        recent_history = raw_messages
-
-    # Combine: [SystemMessage] + [Recent History]
-    prompt_messages = [system_msg] + recent_history
+    if not state.prepared_messages:
+        raise RuntimeError("Budgeted context preparation must run before agent_node")
+    prompt_messages = state.prepared_messages
         
     # Run the model
+    started = time.monotonic()
     try:
-        response = await llm.ainvoke(prompt_messages, config)
+        response = await llm.ainvoke(prompt_messages, config, **output_limit_kwargs(model_selection, ctx_manager.output_reserve))
     except Exception as e:
         friendly = _map_llm_error(e)
         logger.error(f"[AgentNode] LLM error (model={model_selection}): {friendly}")
         error_msg = AIMessage(content=f"❌ {friendly}")
         return {"messages": [error_msg]}
-    return {"messages": [response]}
+    usage = model_usage_metrics(response, model_selection, round((time.monotonic() - started) * 1000))
+    logger.info("context usage: %s", serialize(usage))
+    return {"messages": [response], "context_metrics": {**state.context_metrics, "model_usage": usage}}
 
 
-async def summarize_node(state: AgentState, config):
-    """
-    Post-processing node to update the conversation summary in the background.
-    Replaces the 'aafter_agent' logic from middleware.
-    """
-    messages = state.messages
-    
-    # Voice fast-path: skip summarization for voice call threads (minimal latency)
-    if hasattr(config, "metadata") or (isinstance(config, dict) and "metadata" in config):
-        metadata = config.get("metadata", {}) if isinstance(config, dict) else getattr(config, "metadata", {})
-        if metadata.get("type") == "call":
-            return {}
+def selected_context_tools(config) -> list:
+    from tools import ALL_TOOLS
+    excluded = {"make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"} if _is_voice_channel(config) else set()
+    return [tool for tool in ALL_TOOLS if tool.name not in excluded]
 
-    thread_id = config.get("configurable", {}).get("thread_id", "default_thread")
-    
-    # Logic from context_manager.py
-    existing_summary, summarized_count = await get_thread_memory(thread_id)
-    unsummarized = messages[summarized_count:]
-    
-    if ctx_manager.should_summarize(unsummarized):
-        to_summarize, _ = ctx_manager.get_messages_to_summarize(unsummarized)
-        if to_summarize:
-            logger.info(f"Summarizing {len(to_summarize)} messages for thread {thread_id}")
-            summary_prompt = ctx_manager.build_summary_prompt(to_summarize)
-            llm = get_model(app_config.MEMORY_MODEL_SELECTION)
-            result = await llm.ainvoke([HumanMessage(content=summary_prompt)], config={"callbacks": []})
-            new_summary = result.content.strip()
-            
-            combined_summary = f"{existing_summary}\n\n{new_summary}" if existing_summary else new_summary
-            new_count = summarized_count + len(to_summarize)
-            
-            # Log summary evaluation via logger (non-blocking)
-            logger.info(
-                f"Summary evaluation: {len(to_summarize)} msgs summarized | "
-                f"New summary length: {len(new_summary)} chars | "
-                f"Combined length: {len(combined_summary)} chars"
-            )
-            # ----------------------------------------------------------
 
-            await set_thread_memory(thread_id, combined_summary, new_count)
-            # Update state so the next turn has the new summary
-            return {"conversation_summary": combined_summary, "summarized_count": new_count}
-
-    return {}
+async def prepare_context_node(state: AgentState, config) -> dict:
+    """Run before EVERY invocation, including tools loops and voice turns."""
+    user_id = require_user_id(config)
+    thread_id = require_thread_id(config)
+    try:
+        prepared = await ctx_manager.prepare(
+            state.messages, state.system_instruction, selected_context_tools(config), user_id, thread_id,
+            runtime_context=state.runtime_context,
+        )
+        return {"prepared_messages": prepared.messages, "conversation_summary": prepared.summary,
+                "summarized_count": prepared.covered_count, "context_metrics": prepared.metrics,
+                "context_error": ""}
+    except Exception as exc:
+        logger.exception("context preparation failed; no main-model request sent")
+        return {"prepared_messages": [], "context_error": f"{type(exc).__name__}: {exc}",
+                "context_metrics": {"event": "context.failed", "error_type": type(exc).__name__}}
 
 
 async def extract_knowledge_node(state: AgentState, config):
-    """
-    Every N turns, ask the LLM to review the conversation and update memory files.
-    The LLM sees ALL existing memories first, so it won't duplicate.
-    """
-    interval = app_config.EXTRACTION_INTERVAL
-    counter = getattr(state, "extraction_counter", 0) + 1
+    """Conservatively extract evidence-backed user facts, never assistant wording."""
+    import json
+    from logic.memory_policy import CATEGORY_FILES, user_sources, validate_candidate
+    from logic.schema import KnowledgeExtractionResult
 
-    if counter < interval:
-        logger.debug(
-            "[extract_knowledge] SKIP (counter=%d < interval=%d)",
-            counter, interval,
-        )
+    counter = state.extraction_counter + 1
+    if counter < app_config.EXTRACTION_INTERVAL:
         return {"extraction_counter": counter}
-
-    messages = state.messages
-    if len(messages) < 2:
-        logger.debug("[extract_knowledge] SKIP (messages=%d < 2)", len(messages))
-        return {"extraction_counter": 0}
-
-    prev_extracted = getattr(state, "extracted_msg_count", 0)
-    unextracted = messages[prev_extracted:]
-    if len(unextracted) < 2:
-        logger.debug(
-            "[extract_knowledge] SKIP (unextracted=%d < 2, prev=%d)",
-            len(unextracted), prev_extracted,
-        )
-        return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-
-    # Build conversation transcript
-    turns: list[str] = []
-    i = 0
-    while i < len(unextracted):
-        m = unextracted[i]
-        if isinstance(m, HumanMessage) and m.content:
-            user_text = str(m.content).strip()
-            if len(user_text) >= app_config.EXTRACTION_MIN_MSG_LENGTH:
-                assistant_text = ""
-                for j in range(i + 1, len(unextracted)):
-                    am = unextracted[j]
-                    if isinstance(am, AIMessage) and am.content and not getattr(am, "tool_calls", None):
-                        assistant_text = str(am.content).strip()
-                        break
-                if assistant_text:
-                    turns.append(f"用户：{user_text}\n助手：{assistant_text}")
-            i += 1
-        else:
-            i += 1
-
-    if not turns:
-        logger.debug(
-            "[extract_knowledge] SKIP (no turns built | unextracted=%d)",
-            len(unextracted),
-        )
-        return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-
-    resolved = _get_user_id_from_config(config)
-    user_id = resolved if resolved != "default" else (state.user_id or "default")
-    conversation_text = "\n---\n".join(turns)
-
-    # Load existing memories so the LLM can avoid duplicates
-    existing = memory_manager.load_all_memories(user_id)
-    existing_block = f"\n[已有记忆]\n{existing}\n" if existing else ""
-
-    logger.debug(
-        "[extract_knowledge] ENTER extraction | user_id=%s | turns=%d | "
-        "existing_mem_len=%d | conv_len=%d",
-        user_id, len(turns), len(existing), len(conversation_text),
-    )
-
+    sources = user_sources(state.messages, state.extracted_msg_count)
+    complete = {"extraction_counter": 0, "extracted_msg_count": len(state.messages)}
+    if not sources:
+        return complete
+    user_id = require_user_id(config)
     try:
-        from utils.structured_output import structured_invoke, StructuredOutputError
-        from logic.schema import KnowledgeExtractionResult
-
-        llm = get_model(app_config.MEMORY_MODEL_SELECTION)
-        prompt = KNOWLEDGE_EXTRACTION_PROMPT.format(
-            existing_memories=existing_block,
-            conversation=conversation_text,
-        )
-        logger.debug(
-            "[extract_knowledge] Calling structured_invoke | schema=KnowledgeExtractionResult",
-        )
-        result = await structured_invoke(
-            llm,
-            [HumanMessage(content=prompt)],
-            KnowledgeExtractionResult,
-            max_retries=2,
+        existing = memory_manager.load_all_memories(user_id)
+        payload = json.dumps({
+            "existing_memories": existing,
+            "user_messages": [{"message_index": index, "text": text} for index, text in sources.items()],
+        }, ensure_ascii=False)
+        model = get_model(app_config.MEMORY_MODEL_SELECTION)
+        result = await model.with_structured_output(KnowledgeExtractionResult).ainvoke(
+            [SystemMessage(content=KNOWLEDGE_EXTRACTION_PROMPT), HumanMessage(content=payload)],
             config={"callbacks": []},
         )
-        logger.debug(
-            "[extract_knowledge] structured_invoke returned | facts=%d",
-            len(result.facts),
-        )
-
-        if not result.facts:
-            logger.debug("[extract_knowledge] No facts extracted (empty result)")
-            return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
-
-        # Map category to filename, append each fact
-        cat_to_file = {
-            "profile": "profile.md",
-            "preferences": "preferences.md",
-            "relationship": "relationship.md",
-            "patterns": "learned_patterns.md",
-        }
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        added = 0
-        skipped_dup = 0
-        for f in result.facts:
-            fname = cat_to_file.get(f.category, "profile.md")
-            line = f"- [{timestamp}] {f.fact}"
-            if line.strip().lower() in existing.lower():
-                skipped_dup += 1
-                logger.debug(
-                    "[extract_knowledge] SKIP duplicate | cat=%s | fact=%.80s",
-                    f.category, f.fact,
+        if not isinstance(result, KnowledgeExtractionResult):
+            raise TypeError("Memory extraction returned an invalid structured result")
+        added = rejected = duplicates = 0
+        for fact in result.facts:
+            try:
+                validate_candidate(fact, sources)
+                written = memory_manager.append_to_memory_file(
+                    user_id, CATEGORY_FILES[fact.category],
+                    f"- [{datetime.now().strftime('%Y-%m-%d')}] {fact.fact.strip()}",
                 )
-                continue
-            memory_manager.append_to_memory_file(user_id, fname, line)
-            added += 1
-            logger.debug(
-                "[extract_knowledge] WROTE | cat=%s | file=%s | fact=%.80s",
-                f.category, fname, f.fact,
-            )
-
-        logger.info(
-            "[extract_knowledge] DONE | user_id=%s | found=%d | added=%d | "
-            "skipped_dup=%d",
-            user_id, len(result.facts), added, skipped_dup,
-        )
-
-    except StructuredOutputError as e:
-        logger.warning(
-            "[extract_knowledge] StructuredOutputError | user_id=%s | err=%s",
-            user_id, e,
-        )
-    except Exception as e:
-        logger.warning(
-            "[extract_knowledge] Unexpected error | user_id=%s | err=%s | type=%s",
-            user_id, e, type(e).__name__,
-        )
-
-    return {"extraction_counter": 0, "extracted_msg_count": len(messages)}
+                added += int(written)
+                duplicates += int(not written)
+            except ValueError as exc:
+                rejected += 1
+                logger.warning("[extract_knowledge] rejected candidate: %s", exc)
+        logger.info("[extract_knowledge] added=%d duplicate=%d rejected=%d", added, duplicates, rejected)
+    except Exception:
+        logger.exception("[extract_knowledge] extraction failed; cursor preserved")
+        return {"extraction_counter": 0}
+    return complete

@@ -1,36 +1,21 @@
 from langchain.tools import tool, ToolRuntime
 from datetime import datetime
 import logging
+import json
+from langchain_core.messages import HumanMessage, SystemMessage
+from logic.memory_policy import CATEGORY_DESCRIPTIONS, CATEGORY_FILES, MEMORY_POLICY, user_sources, validate_candidate
+from logic.schema import KnowledgeExtractionResult
+from core.config import config
+from services.llm import get_model
+from utils.auth_utils import require_runtime_user_id
 
 logger = logging.getLogger("memory-tools")
 
 
 def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
-    if hasattr(runtime, "config") and runtime.config:
-        conf = runtime.config.get("configurable", {})
-        auth_user = conf.get("langgraph_auth_user", {})
-        if isinstance(auth_user, dict) and "identity" in auth_user:
-            return auth_user["identity"]
+    """Extract a verified user_id from LangGraph request metadata."""
+    return require_runtime_user_id(runtime)
 
-        metadata = runtime.config.get("metadata", {})
-        if "owner" in metadata:
-            return metadata["owner"]
-
-        if "thread_owner" in conf:
-            return conf["thread_owner"]
-    if hasattr(runtime, "state") and runtime.state:
-        if isinstance(runtime.state, dict): return runtime.state.get("user_id", "default")
-        return getattr(runtime.state, "user_id", "default")
-    return "default"
-
-
-CATEGORY_DESCRIPTIONS = {
-    "profile": "基本信息 — 姓名、身份、重要日期、核心信息",
-    "preferences": "偏好 — 喜欢/讨厌的事物、口味、兴趣",
-    "relationship": "关系 — 关系状态、与他人的互动历史",
-    "patterns": "行为模式 — 习惯、工作方式、作息规律",
-}
 
 VALID_CATEGORIES = list(CATEGORY_DESCRIPTIONS.keys())
 
@@ -68,12 +53,7 @@ def get_user_memory_category(category: str, runtime: ToolRuntime) -> str:
     if category not in VALID_CATEGORIES:
         return f"无效类别 '{category}'。可选类别: {', '.join(VALID_CATEGORIES)}"
 
-    filename = {
-        "profile": "profile.md",
-        "preferences": "preferences.md",
-        "relationship": "relationship.md",
-        "patterns": "learned_patterns.md",
-    }[category]
+    filename = CATEGORY_FILES[category]
 
     memories = memory_manager.load_memories(user_id, [filename])
     if not memories:
@@ -82,8 +62,13 @@ def get_user_memory_category(category: str, runtime: ToolRuntime) -> str:
 
 
 @tool
-def update_user_memory(category: str, content: str, runtime: ToolRuntime) -> str:
-    """Update the user's L1 local memory in a specific category.
+async def update_user_memory(category: str, content: str, runtime: ToolRuntime) -> str:
+    """Save a durable fact ONLY when the current user explicitly asks to remember it.
+
+    Not for one-off tasks, transient formatting, inferred preferences, screen
+    observations, or assistant suggestions. A shared evidence reviewer must approve
+    the fact against the latest user message. Existing conflicting facts require
+    clarification; this tool does not overwrite or delete memories.
 
     Args:
         category: One of 'profile', 'preferences', 'relationship', 'patterns'
@@ -96,17 +81,33 @@ def update_user_memory(category: str, content: str, runtime: ToolRuntime) -> str
     if category not in VALID_CATEGORIES:
         return f"无效类别 '{category}'。可选类别: {', '.join(VALID_CATEGORIES)}"
 
-    filename = {
-        "profile": "profile.md",
-        "preferences": "preferences.md",
-        "relationship": "relationship.md",
-        "patterns": "learned_patterns.md",
-    }[category]
+    filename = CATEGORY_FILES[category]
 
     try:
+        state = runtime.state
+        messages = state.get("messages", []) if isinstance(state, dict) else state.messages
+        sources = user_sources(messages)
+        if not sources:
+            return "未保存：没有可核验的本轮用户原话"
+        latest = max(sources)
+        sources = {latest: sources[latest]}
+        result = await get_model(config.MEMORY_MODEL_SELECTION).with_structured_output(KnowledgeExtractionResult).ainvoke(
+            [SystemMessage(content=MEMORY_POLICY + "\n额外要求：这是显式记忆工具。用户本轮必须明确要求长期记住此事；否则返回空 facts。只审核 proposed_fact，批准时 fact 与 category 必须原样返回，不得改写成其他事实。"),
+             HumanMessage(content=json.dumps({
+                 "user_messages": [{"message_index": latest, "text": sources[latest]}],
+                 "existing_memories": memory_manager.load_all_memories(user_id),
+                 "proposed_fact": {"category": category, "fact": content},
+             }, ensure_ascii=False))], config={"callbacks": []},
+        )
+        if not isinstance(result, KnowledgeExtractionResult):
+            raise TypeError("Invalid memory review result")
+        if len(result.facts) != 1 or result.facts[0].category != category or result.facts[0].fact != content:
+            return "未保存：不符合长期记忆规则、已有相同信息或需要先确认冲突"
+        validate_candidate(result.facts[0], sources)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         entry = f"- [{timestamp}] {content}"
-        memory_manager.append_to_memory_file(user_id, filename, entry)
+        if not memory_manager.append_to_memory_file(user_id, filename, entry):
+            return "已有相同记忆，未重复添加"
         logger.info(f"L1 memory updated: user={user_id}, category={category}")
         return f"已更新用户画像 [{category}]: {content}"
     except Exception as e:

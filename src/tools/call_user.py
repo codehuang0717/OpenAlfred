@@ -12,7 +12,12 @@ from langchain.messages import ToolMessage
 from langgraph.types import Command
 
 from core.config import config
-from core.database import get_active_user, get_user_bark_url
+from core.database import get_user_bark_url
+from utils.auth_utils import (
+    require_config_value,
+    require_explicit_user_id,
+    require_runtime_user_id,
+)
 from services.notification import notification_service
 
 logger = logging.getLogger("call-user-tool")
@@ -23,9 +28,11 @@ OUTBOUND_TRUNK_ID = config.LIVEKIT_SIP_TRUNK_ID
 
 def generate_sip_token():
     """根据 LiveKit 官方规范生成 SIP 专用 Token"""
+    api_key = require_config_value("LIVEKIT_API_KEY", config.LIVEKIT_API_KEY)
+    api_secret = require_config_value("LIVEKIT_API_SECRET", config.LIVEKIT_API_SECRET)
     now = int(time.time())
     payload = {
-        "iss": config.LIVEKIT_API_KEY,
+        "iss": api_key,
         "sub": "openalfred-call-user",
         "iat": now,
         "nbf": now - 60,  # 提前一分钟防止服务器时间误差
@@ -40,14 +47,16 @@ def generate_sip_token():
         },
         "sip": {"admin": True, "call": True},
     }
-    return pyjwt.encode(payload, config.LIVEKIT_API_SECRET, algorithm="HS256")
+    return pyjwt.encode(payload, api_secret, algorithm="HS256")
 
 
 def generate_room_admin_token(room_name: str):
     """Generate a room-scoped token for LiveKit RoomService polling."""
+    api_key = require_config_value("LIVEKIT_API_KEY", config.LIVEKIT_API_KEY)
+    api_secret = require_config_value("LIVEKIT_API_SECRET", config.LIVEKIT_API_SECRET)
     now = int(time.time())
     payload = {
-        "iss": config.LIVEKIT_API_KEY,
+        "iss": api_key,
         "sub": "openalfred-call-monitor",
         "iat": now,
         "nbf": now - 60,
@@ -59,42 +68,12 @@ def generate_room_admin_token(room_name: str):
             "canSubscribe": True,
         },
     }
-    return pyjwt.encode(payload, config.LIVEKIT_API_SECRET, algorithm="HS256")
+    return pyjwt.encode(payload, api_secret, algorithm="HS256")
 
 
 async def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth or custom metadata."""
-    if hasattr(runtime, "config") and runtime.config:
-        conf = runtime.config.get("configurable", {})
-        
-        # 1. LangGraph Auth (Service JWT sub)
-        auth_user = conf.get("langgraph_auth_user", {})
-        if isinstance(auth_user, dict) and "identity" in auth_user:
-            return auth_user["identity"]
-            
-        # 2. Trusted service/voice ownership fields
-        if "owner" in conf: return conf["owner"]
-        if "thread_owner" in conf: return conf["thread_owner"]
-
-        # 3. Request Metadata
-        metadata = runtime.config.get("metadata", {})
-        if "owner" in metadata:
-            return metadata["owner"]
-
-    # 4. Global Fallback: Query the currently active user from DB (Last Resort)
-    try:
-        active_user = await get_active_user()
-        if active_user:
-            return active_user["id"]
-    except Exception:
-        pass
-
-    # Fallback to state payload
-    if hasattr(runtime, "state") and runtime.state:
-        if isinstance(runtime.state, dict):
-            return runtime.state.get("user_id", "default")
-        return getattr(runtime.state, "user_id", "default")
-    return "default"
+    """Extract a verified user_id from LangGraph request metadata."""
+    return require_runtime_user_id(runtime)
 
 
 def _room_name_to_thread_uuid(room_name: str) -> str:
@@ -120,12 +99,8 @@ async def _send_call_fallback_bark(
     supervisor_id: str | None = None,
 ) -> bool:
     """Send a Bark fallback when a SIP call cannot be connected."""
-    bark_url = ""
-    if user_id and user_id != "default":
-        try:
-            bark_url = await get_user_bark_url(user_id)
-        except Exception as e:
-            logger.warning(f"[call-fallback] failed to load user bark_url: {e}")
+    user_id = require_explicit_user_id(user_id)
+    bark_url = await get_user_bark_url(user_id)
 
     body_parts = [f"Voice call to {target_number} was not connected."]
     if initial_speech:
@@ -218,8 +193,17 @@ async def _wait_for_outbound_answer(
     return False, f"no answer within {int(timeout_seconds)}s ({last_status})"
 
 
-async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id: str = "default", reminder_id: str = None, supervisor_id: str = None) -> str:
+async def dial_user(
+    *,
+    user_id: str,
+    phone_number: str = "",
+    initial_speech: str = "",
+    reminder_id: str = None,
+    supervisor_id: str = None,
+) -> str:
     """ Core logic to initiate an outbound SIP call. Returns status message. """
+    user_id = require_explicit_user_id(user_id)
+    trunk_id = require_config_value("LIVEKIT_SIP_TRUNK_ID", OUTBOUND_TRUNK_ID)
     if reminder_id:
         room_name = f"outbound-reminder-{reminder_id}-{user_id}"
     elif supervisor_id:
@@ -240,10 +224,11 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
     # Step 1: Pre-create thread
     try:
         now = int(time.time())
+        jwt_secret = require_config_value("JWT_SECRET", config.JWT_SECRET)
         svc_jwt = pyjwt.encode(
             {"sub": user_id, "username": "supervisor", "service": True,
              "iat": now, "exp": now + 3600},
-            config.JWT_SECRET, algorithm=config.JWT_ALGORITHM,
+            jwt_secret, algorithm=config.JWT_ALGORITHM,
         )
         async with httpx.AsyncClient() as client:
             await client.post(
@@ -266,7 +251,7 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
     url = f"{api_url.rstrip('/')}/twirp/livekit.SIP/CreateSIPParticipant"
 
     dial_data = {
-        "sip_trunk_id": OUTBOUND_TRUNK_ID,
+        "sip_trunk_id": trunk_id,
         "sipCallTo": target_number,
         "roomName": room_name,
         "participantIdentity": "agent_caller",
@@ -317,24 +302,18 @@ async def dial_user(phone_number: str = "100", initial_speech: str = "", user_id
 
 async def _resolve_phone_number(user_id: str) -> str:
     """Resolve a dialable number for the given user.
-    Returns the user's sip_extension if available, else the supervisor default.
+    Raises when the user has no SIP extension; never dials a global target.
     """
-    if user_id and user_id != "default":
-        try:
-            from core.database import get_user_by_id
-            user = await get_user_by_id(user_id)
-            if user and user.get("sip_extension"):
-                ext = user["sip_extension"]
-                logger.info(
-                    f"[_resolve_phone_number] user_id={user_id} "
-                    f"-> sip_extension={ext}"
-                )
-                return ext
-        except Exception as e:
-            logger.warning(f"[_resolve_phone_number] lookup failed: {e}")
-    fallback = config.SUPERVISOR_PHONE_NUMBER
-    logger.info(f"[_resolve_phone_number] user_id={user_id} -> fallback={fallback}")
-    return fallback
+    user_id = require_explicit_user_id(user_id)
+    from core.database import get_user_by_id
+    user = await get_user_by_id(user_id)
+    if not user:
+        raise ValueError(f"User not found: {user_id}")
+    extension = str(user.get("sip_extension") or "").strip()
+    if not extension:
+        raise ValueError(f"User {user_id} has no SIP extension configured")
+    logger.info(f"[_resolve_phone_number] user_id={user_id} -> sip_extension={extension}")
+    return extension
 
 
 @tool
@@ -354,7 +333,7 @@ async def make_outbound_call(
         f"[make_outbound_call] user_id={user_id} phone={target} "
         f"speech={initial_speech[:50]}"
     )
-    msg = await dial_user(target, initial_speech, user_id)
+    msg = await dial_user(user_id=user_id, phone_number=target, initial_speech=initial_speech)
 
     return Command(
         update={

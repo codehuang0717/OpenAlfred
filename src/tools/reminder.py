@@ -1,19 +1,15 @@
 from langchain.tools import tool, ToolRuntime
 from langchain.messages import ToolMessage
 from langgraph.types import Command
-import httpx
 from typing import Optional, Literal
 import uuid
-from datetime import datetime, timezone
 import os
 import wave
-import asyncio
-from zoneinfo import ZoneInfo
-from core.config import config
 from services.tts import save_tts_to_file
 
 # Import DB and utils functions
 from utils.time_utils import localize_to_utc
+from utils.auth_utils import require_runtime_user_id
 from core.database import (
     add_reminder as db_add_reminder,
     get_all_reminders,
@@ -55,23 +51,8 @@ async def pre_render_tts(text: str, filename: str) -> str:
 
 
 def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth."""
-    if hasattr(runtime, "config") and runtime.config:
-        conf = runtime.config.get("configurable", {})
-        auth_user = conf.get("langgraph_auth_user", {})
-        if isinstance(auth_user, dict) and "identity" in auth_user:
-            return auth_user["identity"]
-            
-        metadata = runtime.config.get("metadata", {})
-        if "owner" in metadata:
-            return metadata["owner"]
-            
-        if "thread_owner" in conf:
-            return conf["thread_owner"]
-    if hasattr(runtime, "state") and runtime.state:
-        if isinstance(runtime.state, dict): return runtime.state.get("user_id", "default")
-        return getattr(runtime.state, "user_id", "default")
-    return "default"
+    """Extract a verified user_id from LangGraph request metadata."""
+    return require_runtime_user_id(runtime)
 
 @tool
 async def add_reminder(
@@ -169,30 +150,21 @@ async def list_reminders(
             utc_from = None
             utc_to = None
             if date_from:
-                try:
-                    utc_from = parse_to_aware_utc(localize_to_utc(date_from))
-                except Exception:
-                    pass
+                utc_from = parse_to_aware_utc(localize_to_utc(date_from))
             if date_to:
-                try:
-                    utc_to = parse_to_aware_utc(localize_to_utc(date_to))
-                except Exception:
-                    pass
+                utc_to = parse_to_aware_utc(localize_to_utc(date_to))
             
             filtered = []
             for r in reminders:
                 scheduled = r.get('scheduled_at', '')
                 if not scheduled:
                     continue
-                try:
-                    r_dt = parse_to_aware_utc(scheduled)
-                    if utc_from and r_dt < utc_from:
-                        continue
-                    if utc_to and r_dt > utc_to:
-                        continue
-                    filtered.append(r)
-                except Exception:
-                    continue  # Skip unparseable entries
+                r_dt = parse_to_aware_utc(scheduled)
+                if utc_from and r_dt < utc_from:
+                    continue
+                if utc_to and r_dt > utc_to:
+                    continue
+                filtered.append(r)
             reminders = filtered
         
         if not reminders:
@@ -209,10 +181,7 @@ async def list_reminders(
         
         # Sort upcoming by scheduled_at ascending (nearest first)
         def parse_scheduled(r):
-            try:
-                return parse_to_aware_utc(r.get('scheduled_at', ''))
-            except Exception:
-                return datetime.max.replace(tzinfo=timezone.utc)
+            return parse_to_aware_utc(r.get('scheduled_at', ''))
         
         upcoming.sort(key=parse_scheduled)
         

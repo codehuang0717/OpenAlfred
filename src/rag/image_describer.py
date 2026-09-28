@@ -1,6 +1,9 @@
 """
-Image describer — uses Gemini multimodal to generate text descriptions
-of images, with file-hash-based cache to avoid re-describing.
+Image describer — uses mimo-v2.6 multimodal (not Pro) to generate text
+descriptions of images, with file-hash-based cache to avoid re-describing.
+
+Pro (`mimo-v2.6-pro`) has no vision. Official image model id: `mimo-v2.6`
+https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding
 """
 
 import os
@@ -12,6 +15,7 @@ from utils.logger import get_logger
 logger = get_logger("rag.image_describer")
 
 CACHE_DIR = config.PROJECT_ROOT / "data" / "descriptions"
+MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 DESCRIBE_PROMPT = (
     "Please describe this image in detail, in Chinese. "
@@ -73,7 +77,7 @@ def _write_cache(file_hash: str, description: str):
 
 
 def describe_image(image_path: str, force: bool = False) -> str:
-    """Generate a Chinese text description for an image using Gemini.
+    """Generate a Chinese text description for an image using mimo-v2.6.
 
     Uses file-content hash for cache. Returns empty string on failure.
     """
@@ -91,14 +95,20 @@ def describe_image(image_path: str, force: bool = False) -> str:
 
     logger.info("Describing image: %s (hash=%s)", Path(image_path).name, file_hash[:12])
 
+    if not config.MIMO_API_KEY:
+        logger.warning("MIMO_API_KEY not set; cannot describe %s", image_path)
+        return ""
+
     try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage
         import base64
 
-        model = ChatGoogleGenerativeAI(
-            model=config.GEMINI_CHAT_MODEL,
-            google_api_key=config.GOOGLE_API_KEY,
+        model = ChatOpenAI(
+            model=config.MIMO_VISION_MODEL,
+            base_url=MIMO_BASE_URL,
+            api_key=config.MIMO_API_KEY,
+            max_tokens=1024,
         )
 
         with open(image_path, "rb") as f:
@@ -110,14 +120,16 @@ def describe_image(image_path: str, force: bool = False) -> str:
         mime_type = mime_map.get(ext, "image/png")
 
         msg = HumanMessage(content=[
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
+            },
             {"type": "text", "text": DESCRIBE_PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}},
         ])
 
         response = model.invoke([msg])
         raw = response.content
         if isinstance(raw, list):
-            # Extract text from content blocks
             parts = []
             for block in raw:
                 if isinstance(block, dict):
@@ -133,7 +145,7 @@ def describe_image(image_path: str, force: bool = False) -> str:
             logger.info("Image described: %s -> %.80s...", Path(image_path).name, description)
             return description
         else:
-            logger.warning("Gemini returned empty description for %s", image_path)
+            logger.warning("MiMo returned empty description for %s", image_path)
             return ""
 
     except Exception as e:

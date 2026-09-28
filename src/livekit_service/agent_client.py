@@ -110,6 +110,9 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
 
     try:
         latency_tracker.start("llm_graph_invoke")
+        final_text = ""
+        message_yielded = False
+        llm_timed = False
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -127,7 +130,8 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                         "configurable": {
                             "thread_id": thread_uuid,
                             "user_id": user_id,
-                            "owner": user_id
+                            "owner": user_id,
+                            "channel": "voice",
                         },
                     },
                     "metadata": {
@@ -146,41 +150,69 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                     yield "message", "抱歉，我暂时无法处理你的请求。"
                     return
 
-                final_text = ""
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         try:
                             data = json.loads(line[6:])
-                            if isinstance(data, dict):
-                                for node_name, state_update in data.items():
-                                    if node_name == "agent" and "messages" in state_update:
-                                        messages = state_update["messages"]
-                                        if messages:
-                                            last_msg = messages[-1]
-                                            if last_msg.get("type") == "ai":
-                                                tool_calls = last_msg.get("tool_calls", [])
-                                                if tool_calls:
-                                                    for tc in tool_calls:
-                                                        name = tc.get("name")
-                                                        if name:
-                                                            yield "tool_call", name
+                            for node_name, state_update in _iter_update_nodes(data):
+                                if node_name != "agent" or not isinstance(state_update, dict):
+                                    continue
+                                messages = state_update.get("messages") or []
+                                if not messages:
+                                    continue
+                                last_msg = messages[-1]
+                                if last_msg.get("type") != "ai":
+                                    continue
 
-                                                content = last_msg.get("content", "")
-                                                if isinstance(content, list):
-                                                    content = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
-                                                if content and content.strip():
-                                                    final_text = content.strip()
+                                tool_calls = last_msg.get("tool_calls") or []
+                                if tool_calls:
+                                    for tc in tool_calls:
+                                        name = tc.get("name") if isinstance(tc, dict) else None
+                                        if name:
+                                            yield "tool_call", name
+
+                                content = last_msg.get("content", "")
+                                if isinstance(content, list):
+                                    content = "".join(
+                                        b.get("text", "") if isinstance(b, dict) else str(b)
+                                        for b in content
+                                    )
+                                content = (content or "").strip()
+                                if content and not tool_calls and not message_yielded:
+                                    final_text = content
+                                    message_yielded = True
+                                    if not llm_timed:
+                                        latency_tracker.end("llm_graph_invoke")
+                                        latency_tracker.end("llm_total")
+                                        llm_timed = True
+                                    logger.info(
+                                        "[TIMING][Agent] EARLY_MESSAGE | chars=%d",
+                                        len(final_text),
+                                    )
+                                    yield "message", final_text
                         except json.JSONDecodeError:
                             continue
 
-        latency_tracker.end("llm_graph_invoke")
-        latency_tracker.end("llm_total")
-        
-        if final_text:
-            yield "message", final_text
-        else:
-            yield "message", "收到"
+        if not llm_timed:
+            latency_tracker.end("llm_graph_invoke")
+            latency_tracker.end("llm_total")
+
+        if not message_yielded:
+            yield "message", final_text or "收到"
             
     except Exception as e:
         logger.error(f"Voice Agent Error: {e}", exc_info=True)
         yield "message", "抱歉，我暂时无法处理你的请求。"
+
+
+def _iter_update_nodes(data):
+    """Yield (node_name, state_update) from a LangGraph updates SSE payload."""
+    if not isinstance(data, dict):
+        return
+    payload = data.get("data") if data.get("event") == "updates" or data.get("type") == "updates" else data
+    if not isinstance(payload, dict):
+        return
+    for node_name, state_update in payload.items():
+        if node_name in {"event", "type", "data"}:
+            continue
+        yield node_name, state_update

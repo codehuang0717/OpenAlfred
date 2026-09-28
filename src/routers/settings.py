@@ -1,14 +1,17 @@
 import os
+import asyncio
 import logging
 import httpx
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel
 from PIL import Image
 
 from core.database import get_setting, set_setting, get_user_bark_url, set_user_bark_url, get_onboarding_seen, set_onboarding_seen
 from routers.auth import get_current_user
+from services.screen_monitor import monitor_status, write_preferences
+from services.screen_binding import configured_owner, require_local_binding_request, bind_on_desktop
 from services.weather import (
     clear_weather_location,
     get_saved_weather_location,
@@ -162,37 +165,42 @@ async def check_ollama_status():
 @router.get("/supervisor/config")
 async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
     """Get the current supervisor enabled status."""
-    recording_enabled_str = await get_setting("recording_enabled", "true")
-    smart_supervision_enabled_str = await get_setting("smart_supervision_enabled", "true")
-    
-    # Fallback for backward compatibility
-    if not recording_enabled_str and not smart_supervision_enabled_str:
-        old_enabled_str = await get_setting("supervisor_enabled", "true")
-        recording_enabled_str = old_enabled_str
-        smart_supervision_enabled_str = old_enabled_str
-
-    return {
-        "recording_enabled": recording_enabled_str.lower() == "true",
-        "smart_supervision_enabled": smart_supervision_enabled_str.lower() == "true"
-    }
+    try:
+        if configured_owner() is None:
+            return {"binding_required": True, "recording_enabled": False,
+                    "smart_supervision_enabled": False, "supervisor_running": False,
+                    "screenpipe_running": False, "analysis_running": False, "error": None}
+        return {"binding_required": False, **await monitor_status(user["id"])}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 @router.post("/supervisor/config")
 async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = Depends(get_current_user)):
     """Set the supervisor enabled status."""
-    await set_setting("recording_enabled", str(data.recording_enabled).lower())
-    await set_setting("smart_supervision_enabled", str(data.smart_supervision_enabled).lower())
-    
-    # Update legacy setting for compatibility
-    await set_setting("supervisor_enabled", str(data.smart_supervision_enabled).lower())
+    try:
+        await write_preferences(user["id"], data.recording_enabled, data.smart_supervision_enabled)
+        return {"binding_required": False, **await monitor_status(user["id"])}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    from core.event_bus import event_bus, EventType
-    await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
 
-    return {
-        "status": "updated",
-        "recording_enabled": data.recording_enabled,
-        "smart_supervision_enabled": data.smart_supervision_enabled
-    }
+@router.post("/supervisor/bind")
+async def bind_supervisor_account(request: Request, user: dict = Depends(get_current_user)):
+    """Bind only the authenticated identity, with explicit physical desktop consent."""
+    try:
+        require_local_binding_request(request.client.host if request.client else "", request.headers)
+        await asyncio.to_thread(bind_on_desktop, user["id"], user["username"])
+        return {"binding_required": False, **await monitor_status(user["id"])}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 class NotifyConfigRequest(BaseModel):
@@ -232,9 +240,7 @@ async def unbind_notify_config(user: dict = Depends(get_current_user)):
 async def test_notify(user: dict = Depends(get_current_user)):
     """Send a test notification to the current user's Bark device."""
     from services.notification import notification_service
-    from core.config import config as app_config
-
-    bark_url = await get_user_bark_url(user["id"]) or app_config.BARK_URL
+    bark_url = await get_user_bark_url(user["id"])
     if not bark_url:
         raise HTTPException(status_code=400, detail="未配置 Bark URL，请先填入设备地址")
 

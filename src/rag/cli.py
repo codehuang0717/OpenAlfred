@@ -27,6 +27,7 @@ from db.rag import get_documents
 from tools.rag import _resolve_content
 from logic.prompts import RAG_SEARCH_RESULT_HEADER
 from utils.logger import setup_logging, get_logger
+from utils.auth_utils import require_explicit_user_id
 
 logger = get_logger("rag.cli")
 
@@ -60,7 +61,7 @@ def cmd_search(args):
             lines = []
             for i, r in enumerate(results, 1):
                 heading = f" (## {r['heading']})" if r.get("heading") else ""
-                content = await _resolve_content(r["content"])
+                content = await _resolve_content(r["content"], args.user)
                 block = f"[{i}] Source: {r['filename']}{heading} (relevance: {r['score']})\n{content}"
                 lines.append(block)
             results_text = "\n\n---\n\n".join(lines)
@@ -144,7 +145,7 @@ events, and SQLite for structured data storage.
 
 def main():
     parser = argparse.ArgumentParser(description="RAG CLI — Test knowledge base operations")
-    parser.add_argument("--user", default="default", help="User ID (default: 'default')")
+    parser.add_argument("--user", required=True, help="Concrete user ID")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     sub = parser.add_subparsers(dest="command")
 
@@ -169,6 +170,7 @@ def main():
     sub.add_parser("demo", help="Run a self-test demo")
 
     args = parser.parse_args()
+    args.user = require_explicit_user_id(args.user)
 
     level = logging.DEBUG if args.verbose else logging.INFO
     setup_logging(level=level, log_file="rag.log")

@@ -63,12 +63,13 @@ async def structured_invoke(
         native_available, model_name,
     )
 
-    if native_available:
+    if native_available and _supports_native_structured(model):
         try:
             logger.debug(
                 "[structured_output] Trying NATIVE path | schema=%s", schema_name
             )
-            structured_model = model.with_structured_output(schema)
+            bound = _with_output_budget(model)
+            structured_model = bound.with_structured_output(schema)
             result = await structured_model.ainvoke(messages, config=config or {})
             if result is not None:
                 logger.debug(
@@ -96,7 +97,9 @@ async def structured_invoke(
     logger.debug(
         "[structured_output] Switching to JSON_FALLBACK | schema=%s", schema_name
     )
-    return await _invoke_with_json_fallback(model, messages, schema, max_retries, config or {})
+    return await _invoke_with_json_fallback(
+        _with_output_budget(model), messages, schema, max_retries, config or {}
+    )
 
 
 async def _invoke_with_json_fallback(
@@ -154,6 +157,7 @@ async def _invoke_with_json_fallback(
                 )
 
             data = json.loads(cleaned)
+            data = _coerce_schema_payload(schema, data)
             validated = schema.model_validate(data)
             logger.debug(
                 "[structured_output] JSON_FALLBACK OK | schema=%s | attempt=%d",
@@ -188,6 +192,46 @@ async def _invoke_with_json_fallback(
         f"Failed to get valid structured output after "
         f"{max_retries + 1} attempts. Last error: {last_error}"
     )
+
+
+def _supports_native_structured(model) -> bool:
+    """Skip native tool/json-schema path for OpenAI-compat APIs that truncate or ignore it."""
+    name = _get_model_name(model).lower()
+    base = str(
+        getattr(model, "openai_api_base", None)
+        or getattr(model, "base_url", None)
+        or ""
+    ).lower()
+    if "mimo" in name or "xiaomimimo" in base:
+        return False
+    if "ollama" in name or "ollama" in base:
+        return False
+    return True
+
+
+def _with_output_budget(model):
+    """Avoid truncated JSON from providers with a tiny default max_tokens."""
+    bind = getattr(model, "bind", None)
+    if not callable(bind):
+        return model
+    try:
+        return bind(max_tokens=2048)
+    except Exception:
+        return model
+
+
+def _coerce_schema_payload(schema: type[T], data):
+    """Accept a bare list/single fact when the schema wraps them in `facts`."""
+    if not isinstance(data, (dict, list)):
+        return data
+    fields = getattr(schema, "model_fields", {})
+    if "facts" not in fields:
+        return data
+    if isinstance(data, list):
+        return {"facts": data}
+    if "facts" not in data and "category" in data:
+        return {"facts": [data]}
+    return data
 
 
 def _extract_json(text: str) -> str:

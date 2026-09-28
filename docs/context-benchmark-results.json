@@ -1,0 +1,155 @@
+{
+  "method": "offline synthetic replay; no billed tokens, no real cache hits, no model latency; main output excluded (fixed replay); 3 repeats with alternating policy order, timing medians across repeats",
+  "cases": {
+    "short_chat": {
+      "baseline": {
+        "requests": 30,
+        "main_input_tokens_est": 147575,
+        "summary_input_tokens_est": 16941,
+        "summary_output_tokens_stub": 1567,
+        "total_input_plus_stub_summary_output": 166083,
+        "summary_calls": 21,
+        "requests_with_summary": 20,
+        "prefix_overlap_pct_proxy": 88.3,
+        "latest_tool_middle_visible": "0/0",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 43.82,
+        "planner_ms_p95": 44.91
+      },
+      "tuned": {
+        "requests": 30,
+        "main_input_tokens_est": 157830,
+        "summary_input_tokens_est": 0,
+        "summary_output_tokens_stub": 0,
+        "total_input_plus_stub_summary_output": 157830,
+        "summary_calls": 0,
+        "requests_with_summary": 0,
+        "prefix_overlap_pct_proxy": 95.5,
+        "latest_tool_middle_visible": "0/0",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 35.46,
+        "planner_ms_p95": 36.54
+      }
+    },
+    "long_chat": {
+      "baseline": {
+        "requests": 40,
+        "main_input_tokens_est": 493463,
+        "summary_input_tokens_est": 50819,
+        "summary_output_tokens_stub": 2315,
+        "total_input_plus_stub_summary_output": 546597,
+        "summary_calls": 31,
+        "requests_with_summary": 30,
+        "prefix_overlap_pct_proxy": 34.4,
+        "latest_tool_middle_visible": "0/0",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 55.31,
+        "planner_ms_p95": 63.22
+      },
+      "tuned": {
+        "requests": 40,
+        "main_input_tokens_est": 667197,
+        "summary_input_tokens_est": 22788,
+        "summary_output_tokens_stub": 418,
+        "total_input_plus_stub_summary_output": 690403,
+        "summary_calls": 4,
+        "requests_with_summary": 2,
+        "prefix_overlap_pct_proxy": 90.6,
+        "latest_tool_middle_visible": "0/0",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 36.58,
+        "planner_ms_p95": 41.39
+      }
+    },
+    "tool_chain": {
+      "baseline": {
+        "requests": 13,
+        "main_input_tokens_est": 68188,
+        "summary_input_tokens_est": 3495,
+        "summary_output_tokens_stub": 293,
+        "total_input_plus_stub_summary_output": 71976,
+        "summary_calls": 4,
+        "requests_with_summary": 3,
+        "prefix_overlap_pct_proxy": 86,
+        "latest_tool_middle_visible": "12/12",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 38.94,
+        "planner_ms_p95": 47.04
+      },
+      "tuned": {
+        "requests": 13,
+        "main_input_tokens_est": 68887,
+        "summary_input_tokens_est": 0,
+        "summary_output_tokens_stub": 0,
+        "total_input_plus_stub_summary_output": 68887,
+        "summary_calls": 0,
+        "requests_with_summary": 0,
+        "prefix_overlap_pct_proxy": 90.4,
+        "latest_tool_middle_visible": "12/12",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 35.49,
+        "planner_ms_p95": 37.71
+      }
+    },
+    "medium_results": {
+      "baseline": {
+        "requests": 13,
+        "main_input_tokens_est": 90885,
+        "summary_input_tokens_est": 4770,
+        "summary_output_tokens_stub": 290,
+        "total_input_plus_stub_summary_output": 95945,
+        "summary_calls": 4,
+        "requests_with_summary": 3,
+        "prefix_overlap_pct_proxy": 76.7,
+        "latest_tool_middle_visible": "0/12",
+        "tool_preview_occurrences": 78,
+        "planner_ms_median": 48.29,
+        "planner_ms_p95": 66.43
+      },
+      "tuned": {
+        "requests": 13,
+        "main_input_tokens_est": 185963,
+        "summary_input_tokens_est": 12240,
+        "summary_output_tokens_stub": 273,
+        "total_input_plus_stub_summary_output": 198476,
+        "summary_calls": 3,
+        "requests_with_summary": 1,
+        "prefix_overlap_pct_proxy": 80,
+        "latest_tool_middle_visible": "12/12",
+        "tool_preview_occurrences": 0,
+        "planner_ms_median": 36.39,
+        "planner_ms_p95": 38.82
+      }
+    },
+    "huge_results": {
+      "baseline": {
+        "requests": 13,
+        "main_input_tokens_est": 90958,
+        "summary_input_tokens_est": 4796,
+        "summary_output_tokens_stub": 295,
+        "total_input_plus_stub_summary_output": 96049,
+        "summary_calls": 4,
+        "requests_with_summary": 3,
+        "prefix_overlap_pct_proxy": 76.7,
+        "latest_tool_middle_visible": "0/12",
+        "tool_preview_occurrences": 78,
+        "planner_ms_median": 125.95,
+        "planner_ms_p95": 204.33
+      },
+      "tuned": {
+        "requests": 13,
+        "main_input_tokens_est": 93558,
+        "summary_input_tokens_est": 0,
+        "summary_output_tokens_stub": 0,
+        "total_input_plus_stub_summary_output": 93558,
+        "summary_calls": 0,
+        "requests_with_summary": 0,
+        "prefix_overlap_pct_proxy": 88.9,
+        "latest_tool_middle_visible": "0/12",
+        "tool_preview_occurrences": 78,
+        "planner_ms_median": 73.02,
+        "planner_ms_p95": 99.8
+      }
+    }
+  }
+}

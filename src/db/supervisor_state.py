@@ -5,9 +5,11 @@ Supervisor state repository — distraction tracking persistence.
 from typing import Optional
 from datetime import datetime, timezone
 from db.connection import get_db
+from utils.auth_utils import require_explicit_user_id
 
 
-async def get_supervisor_state(user_id: str = "default") -> Optional[dict]:
+async def get_supervisor_state(user_id: str) -> Optional[dict]:
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         async with db.execute(
             "SELECT * FROM supervisor_sessions WHERE user_id = ?",
@@ -24,6 +26,7 @@ async def update_supervisor_state(
     consecutive_distractions: int = 0,
     last_decision: Optional[str] = None
 ):
+    user_id = require_explicit_user_id(user_id)
     now = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:
         # 1. Try to update existing session
@@ -61,6 +64,7 @@ async def update_supervisor_state(
         await db.commit()
 
 async def reset_supervisor_state(user_id: str):
+    user_id = require_explicit_user_id(user_id)
     now = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:
         await db.execute("""

@@ -3,15 +3,13 @@ import logging
 import sys
 import os
 import time
-import json
-import psutil
-import subprocess
+from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Literal, Optional, List
+from typing import Literal
 from pydantic import BaseModel, Field
 
 # Ensure UTF-8 output for Windows Console
-if sys.platform == "win32":
+if sys.platform == "win32" and __name__ == "__main__":
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -21,12 +19,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.database import (
     init_db,
     get_all_todos,
-    get_active_user,
+    get_user_by_id,
     get_supervisor_state,
     update_supervisor_state,
     reset_supervisor_state,
-    get_setting,
-    set_setting,
     AUDIO_CACHE_DIR
 )
 from services.tts import save_tts_to_file
@@ -37,6 +33,8 @@ from services.llm import get_model
 from logic.prompts import SUPERVISOR_PROMPT
 from langchain_core.messages import HumanMessage
 from core.config import config
+from services.screen_monitor import ScreenRecorder, read_preferences, require_screen_owner, monitor_status, device_lock
+from services.screen_binding import configured_owner
 from rich.console import Console
 from rich.panel import Panel
 
@@ -48,55 +46,6 @@ from utils.logger import setup_logging, get_logger
 setup_logging(log_file="supervisor.log")
 logger = get_logger("supervisor")
 
-def get_screenpipe_processes():
-    procs = []
-    for proc in psutil.process_iter(['name']):
-        try:
-            if proc.info['name'] and proc.info['name'].lower() == 'screenpipe.exe':
-                procs.append(proc)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return procs
-
-def get_screenpipe_process():
-    procs = get_screenpipe_processes()
-    return procs[0] if procs else None
-
-def start_screenpipe() -> bool:
-    if not get_screenpipe_process():
-        logger.info("Starting screenpipe dynamically...")
-        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "body", "windows_system", "eye", "setup_eye.ps1")
-        subprocess.Popen(
-            ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_path],
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return True # Indicates it was just started
-    return False
-
-def stop_screenpipe():
-    procs = get_screenpipe_processes()
-    if procs:
-        logger.info(f"Stopping {len(procs)} screenpipe processes and their children dynamically to save resources...")
-        for proc in procs:
-            try:
-                parent = proc.parent()
-                for child in proc.children(recursive=True):
-                    try:
-                        child.kill()
-                    except psutil.NoSuchProcess:
-                        pass
-                proc.kill()
-                if parent and parent.name().lower() == 'powershell.exe':
-                    try:
-                        parent.kill()
-                    except psutil.NoSuchProcess:
-                        pass
-            except psutil.NoSuchProcess:
-                pass
-            except Exception as e:
-                logger.error(f"Error stopping screenpipe: {e}")
-
-
 class SupervisorDecision(BaseModel):
     """Schema for supervisor decision logic."""
     status: Literal["NORMAL", "GENTLE_REMINDER", "STRICT_WARNING", "SEVERE_DISCIPLINE"] = Field(
@@ -107,39 +56,20 @@ class SupervisorDecision(BaseModel):
 
 class ProactiveSupervisor:
     def __init__(self):
-        self.model = get_model("gpt-cloud").with_structured_output(SupervisorDecision)
+        self.model = None
+        self.user_id = configured_owner()
 
     async def run_cycle(self):
-        # 0. Check if Supervision/Recording is enabled in settings
-        recording_str = await get_setting("recording_enabled", "true")
-        smart_str = await get_setting("smart_supervision_enabled", "true")
-        
-        recording_enabled = (recording_str.lower() == "true")
-        smart_supervision_enabled = (smart_str.lower() == "true")
-
-        if not recording_enabled:
-            logger.info("Recording is currently DISABLED. Skipping cycle and stopping Screenpipe.")
-            stop_screenpipe()
+        prefs = await read_preferences(self.user_id)
+        if not prefs["recording_enabled"] or not prefs["smart_supervision_enabled"]:
             return
-            
-        # If recording is enabled, ensure screenpipe is running
-        just_started = start_screenpipe()
-        
-        if not smart_supervision_enabled:
-            logger.info("Smart Supervision is currently DISABLED. Screenpipe is running, but skipping LLM analysis.")
-            return
-
-        if just_started:
-            logger.info("Screenpipe just started. Waiting 5 seconds for it to warm up before capturing context...")
-            await asyncio.sleep(5)
 
         logger.info("--- Starting Smart Supervision Cycle ---")
         
         # 1. Fetch Active User
-        active_user = await get_active_user()
+        active_user = await get_user_by_id(self.user_id)
         if not active_user:
-            logger.warning("No active user found. Skipping cycle.")
-            return
+            raise RuntimeError("绑定的屏幕监控账号不存在")
             
         user_id = active_user['id']
         username = active_user['username']
@@ -176,7 +106,7 @@ class ProactiveSupervisor:
                     scheduled_todos.append(t)
             except Exception as e:
                 logger.warning(f"Error parsing start time for todo {t['id']}: {e}")
-                active_todos.append(t) # Default to active if parsing fails
+                raise ValueError(f"Invalid scheduled_start_at for todo {t['id']}") from e
 
         # Display Monitoring Context
         active_display = "\n".join([f"[blue]•[/blue] {t['title']}" for t in active_todos]) if active_todos else "[italic grey]None (Idle)[/italic grey]"
@@ -199,7 +129,7 @@ class ProactiveSupervisor:
                 await reset_supervisor_state(user_id)
             return
 
-        ocr_context = await get_recent_ocr_text(minutes=config.SUPERVISOR_OCR_WINDOW_MINS)
+        ocr_context = await get_recent_ocr_text(user_id=self.user_id, minutes=config.SUPERVISOR_OCR_WINDOW_MINS)
         
         # 4. Calculate Distraction Duration
         # now is already defined above
@@ -208,8 +138,8 @@ class ProactiveSupervisor:
             try:
                 start_time = datetime.fromisoformat(state['distraction_start_time'].replace('Z', '+00:00'))
                 distraction_duration = int((now - start_time).total_seconds() / 60)
-            except:
-                pass
+            except ValueError as exc:
+                raise ValueError("Invalid distraction_start_time") from exc
         
         # 5. Analyze with LLM
         tasks_list = []
@@ -233,6 +163,8 @@ class ProactiveSupervisor:
         
         logger.info("Context assembled. Requesting LLM analysis...")
         try:
+            if self.model is None:
+                self.model = get_model("gpt-cloud").with_structured_output(SupervisorDecision)
             decision: SupervisorDecision = await self.model.ainvoke([HumanMessage(content=prompt)])
             
             logger.info(f"LLM analysis complete. Status: {decision.status}")
@@ -247,6 +179,9 @@ class ProactiveSupervisor:
             ))
             
             if decision.status != "NORMAL":
+                prefs = await read_preferences(self.user_id)
+                if not prefs["recording_enabled"] or not prefs["smart_supervision_enabled"]:
+                    return
                 # User is distracted
                 new_start_time = state.get('distraction_start_time') or now.isoformat()
                 current_consecutive = state.get('consecutive_distractions') or 0
@@ -263,9 +198,12 @@ class ProactiveSupervisor:
                     wav_path = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{supervisor_id}.wav")
                     logger.info(f"Pre-generating supervisor audio: {wav_path}")
                     await save_tts_to_file(decision.call_greeting, wav_path)
+                    prefs = await read_preferences(self.user_id)
+                    if not prefs["recording_enabled"] or not prefs["smart_supervision_enabled"]:
+                        return
                     
                     call_status = await dial_user(
-                        phone_number=config.SUPERVISOR_PHONE_NUMBER, 
+                        phone_number="",
                         initial_speech=decision.call_greeting,
                         user_id=user_id,
                         supervisor_id=supervisor_id
@@ -291,39 +229,84 @@ class ProactiveSupervisor:
 
         except Exception as e:
             logger.error(f"Error in supervision logic: {e}")
-
-    async def _listen_for_wakeups(self, wakeup_event: asyncio.Event):
-        from core.event_bus import event_bus, EventType
-        async for event in event_bus.subscribe(EventType.SUPERVISOR_WAKEUP.value):
-            logger.info("Supervisor received wakeup event!")
-            wakeup_event.set()
+            raise
 
     async def start(self):
         await init_db()
-        from core.event_bus import event_bus
-        await event_bus.connect()
-        logger.info(f"Supervisor Service Initialized. Interval: {config.SUPERVISOR_INTERVAL}s")
-        
-        wakeup_event = asyncio.Event()
-        asyncio.create_task(self._listen_for_wakeups(wakeup_event))
-        
-        while True:
-            try:
-                await self.run_cycle()
-            except Exception as e:
-                logger.error(f"Critical error in supervisor cycle: {e}")
-                
-            try:
-                await asyncio.wait_for(wakeup_event.wait(), timeout=config.SUPERVISOR_INTERVAL)
-                logger.info("Supervisor cycle triggered early by wakeup event.")
-                wakeup_event.clear()
-            except asyncio.TimeoutError:
-                # Normal interval passed
-                pass
+        while self.user_id is None:
+            logger.info("本机尚未绑定账号，等待用户在主管设置中确认；不会采集屏幕")
+            await asyncio.sleep(3)
+            self.user_id = configured_owner()
+        if not await get_user_by_id(self.user_id):
+            raise RuntimeError("本机绑定的账号不存在")
+        recorder = ScreenRecorder(self.user_id)
+        analysis = None
+        next_analysis = 0.0
+        analysis_error = None
+        recording_error = None
+        try:
+            while True:
+                error = analysis_error
+                try:
+                    prefs = await read_preferences(self.user_id)
+                    if not await get_user_by_id(self.user_id):
+                        raise RuntimeError("绑定的屏幕监控账号已不存在")
+                    if not prefs["recording_enabled"] or not prefs["smart_supervision_enabled"]:
+                        if analysis:
+                            analysis.cancel()
+                            with suppress(asyncio.CancelledError, Exception):
+                                await analysis
+                            analysis = None
+                        next_analysis = 0.0
+                        analysis_error = error = None
+                    if prefs["recording_enabled"]:
+                        if recording_error is None:
+                            await recorder.start()
+                        else:
+                            error = recording_error
+                    else:
+                        await recorder.stop()
+                        recording_error = None
+                    await recorder.heartbeat(error=error, analysis=analysis is not None and not analysis.done())
+                    if analysis and analysis.done():
+                        try:
+                            analysis.result()
+                            analysis_error = None
+                        except Exception as exc:
+                            analysis_error = str(exc) or type(exc).__name__
+                            logger.exception("Screen supervision failed")
+                        error = analysis_error
+                        analysis = None
+                    if recording_error is None and prefs["smart_supervision_enabled"] and analysis is None and time.monotonic() >= next_analysis:
+                        status = await monitor_status(self.user_id)
+                        if status["screenpipe_running"]:
+                            analysis = asyncio.create_task(self.run_cycle())
+                            next_analysis = time.monotonic() + config.SUPERVISOR_INTERVAL
+                except Exception as exc:
+                    error = str(exc) or type(exc).__name__
+                    recording_error = error + "；排除故障后关闭再开启记录以重试"
+                    error = recording_error
+                    logger.exception("Screen monitor failed")
+                    if analysis:
+                        analysis.cancel()
+                        with suppress(asyncio.CancelledError, Exception):
+                            await analysis
+                        analysis = None
+                    await recorder.stop()
+                await recorder.heartbeat(error=error, analysis=analysis is not None and not analysis.done())
+                await asyncio.sleep(3)
+        finally:
+            if analysis:
+                analysis.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await analysis
+            await recorder.stop()
+            await recorder.heartbeat(error="Supervisor 已停止", stopped=True)
 
 if __name__ == "__main__":
     supervisor = ProactiveSupervisor()
     try:
-        asyncio.run(supervisor.start())
+        with device_lock():
+            asyncio.run(supervisor.start())
     except KeyboardInterrupt:
         logger.info("Supervisor stopped by user.")

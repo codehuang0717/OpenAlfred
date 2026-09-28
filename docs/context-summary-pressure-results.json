@@ -1,0 +1,33 @@
+{
+  "provider": "mimo",
+  "model": "mimo-v2.6-pro",
+  "cases": [],
+  "calls": [
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 3479,
+      "output_tokens": 1018,
+      "cache_read_tokens": 2048,
+      "call_elapsed_ms": 26750,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "pressure/tuned",
+      "kind": "summary"
+    }
+  ],
+  "limits": {
+    "api_calls": 6,
+    "estimated_input_with_schema_allowance": 250000,
+    "main_output_per_call": 1024,
+    "summary_final_tokens": 1600,
+    "summary_generation_tokens_tuned": 4096,
+    "summary_generation_tokens_baseline": 1600
+  },
+  "probe_version": 3,
+  "repeats": 1,
+  "method": "synthetic paired replay, two identical main requests per policy; real summaries; tools disabled; no automatic retries; temporary DB; not a production task-success evaluation",
+  "stopped_error_type": "ContextBudgetError",
+  "stopped_phase": "pressure/tuned",
+  "requests_attempted": 2,
+  "measurement_warning": "Second summary attempt failed with ContextBudgetError before usage was captured. This run did not record the cause; do not infer truncation versus timeout. No retry or main-model invocation followed. Failed-call token usage is unknown."
+}

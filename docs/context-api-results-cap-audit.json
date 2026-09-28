@@ -1,0 +1,31 @@
+{
+  "provider": "mimo",
+  "model": "mimo-v2.6-pro",
+  "cases": [],
+  "calls": [
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 581,
+      "output_tokens": 1284,
+      "cache_read_tokens": 576,
+      "call_elapsed_ms": 14903,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "short/baseline",
+      "kind": "summary"
+    }
+  ],
+  "limits": {
+    "api_calls": 3,
+    "estimated_input_with_schema_allowance": 250000,
+    "main_output_per_call": 1024,
+    "summary_output_per_call": 1600
+  },
+  "probe_version": 2,
+  "repeats": 1,
+  "method": "synthetic paired replay, two identical main requests per policy; real summaries; tools disabled; no automatic retries; temporary DB; not a production task-success evaluation",
+  "stopped_error_type": "LengthFinishReasonError",
+  "stopped_phase": "short/baseline",
+  "requests_attempted": 2,
+  "measurement_warning": "Corrected HTTP cap verified by offline transport test. Two API requests attempted: one successful summary with usage, second ended in LengthFinishReasonError before usage was captured. Failed call usage unknown, not zero. No main call or retry followed."
+}

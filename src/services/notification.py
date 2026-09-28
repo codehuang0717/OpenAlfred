@@ -1,7 +1,7 @@
 import httpx
 from utils.logger import get_logger
 from typing import Optional, Literal
-from core.config import config
+from utils.auth_utils import require_config_value
 
 logger = get_logger("notification_service")
 
@@ -30,12 +30,9 @@ class NotificationService:
         Sends a rich notification via Bark.
 
         Args:
-            bark_url: Per-user Bark device URL. Falls back to global config.BARK_URL.
+            bark_url: The authenticated user's Bark device URL.
         """
-        target_url = bark_url or config.BARK_URL
-        if not target_url:
-            logger.warning("BARK_URL is not configured. Skipping notification.")
-            return False
+        target_url = require_config_value("user Bark URL", bark_url)
 
         # Construct the payload
         payload = {

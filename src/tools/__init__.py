@@ -8,6 +8,9 @@ from tools.search import search_tools
 from tools.screenshot import screenshot_tools
 from tools.rag import rag_tools
 from tools.weather import weather_tools
+from tools.user_apps import user_app_tools
+from tools.context_history import context_tools
+from tools.image_generation import image_tools
 
 import logging
 
@@ -23,7 +26,8 @@ _BUILTIN_TOOLS: list = (
     search_tools +
     screenshot_tools +
     rag_tools +
-    weather_tools
+    weather_tools +
+    user_app_tools + context_tools + image_tools
 )
 
 _import_logger.debug(

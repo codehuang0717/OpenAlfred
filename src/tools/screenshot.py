@@ -5,16 +5,20 @@ from PIL import ImageGrab
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from services.llm import get_model
+from langchain.tools import ToolRuntime
+from services.screen_monitor import require_screen_owner
+from utils.auth_utils import require_runtime_user_id
 
 logger = logging.getLogger("tools.screenshot")
 
 @tool
-async def take_screenshot(query: str) -> str:
+async def take_screenshot(query: str, runtime: ToolRuntime) -> str:
     """Take a screenshot of the user's current screen and answer a specific query about it.
     Use this tool when the user asks you to look at their screen or asks what they are doing.
     Provide a specific question in the 'query' parameter to guide the visual analysis.
     """
     try:
+        require_screen_owner(require_runtime_user_id(runtime))
         # Capture screen
         img = ImageGrab.grab()
         buffered = io.BytesIO()
@@ -43,7 +47,10 @@ async def take_screenshot(query: str) -> str:
         )
         
         response = await llm.ainvoke([message])
-        return response.content
+        text = str(response.text)
+        if not text:
+            raise RuntimeError("Vision model returned no text answer")
+        return text
     except Exception as e:
         logger.error(f"Screenshot tool failed: {e}")
         return f"Failed to capture or analyze screen: {str(e)}"

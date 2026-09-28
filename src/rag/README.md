@@ -9,7 +9,7 @@ Markdown 文件
      ↓
 md_parser.py     — 按标题（#/##）拆分为 Section，提取图片引用
      ↓
-image_handler.py — 复制图片到 data/images/ + Gemini 生成中文描述
+image_handler.py — 复制图片到 data/images/ + mimo-v2.6 生成中文描述
      ↓                    └→ image_lookup 表（id → url/alt）
 chunker.py       — 按章节分块（text + heading + images 不分离）
      ↓
@@ -28,7 +28,7 @@ tools/rag.py     — Agent 工具（search_knowledge / list_knowledge）
 ```
 ![alt](./assets/img.png)                           ← 原始 Markdown
      ↓ copy_images() → data/images/{doc_id}/
-     ↓ describe_image() → Gemini 缓存到 data/descriptions/{hash}.txt
+     ↓ describe_image() → mimo-v2.6 缓存到 data/descriptions/{hash}.txt
      ↓
 {"_img":{"i":1,"d":"这张PPT展示了Nielsen的十条启发式原则..."}}  ← 嵌入文本
      ↓ Agent 检索时
@@ -42,7 +42,7 @@ _IMG_PLACEHOLDER regex → get_image_by_id() → ![alt](/api/images/doc_id/img.p
 | `rag/embedding.py` | BGE-M3 embedding（SentenceTransformer） |
 | `rag/md_parser.py` | Markdown 章节解析 + 图片引用提取 |
 | `rag/image_handler.py` | 图片复制、路径重写、JSON 占位符生成 |
-| `rag/image_describer.py` | Gemini 多模态图片描述 + SHA256 缓存 |
+| `rag/image_describer.py` | mimo-v2.6 多模态图片描述 + SHA256 缓存 |
 | `rag/chunker.py` | 章节分块（`chunk_sections`）+ 文本分块（`chunk_text`） |
 | `rag/store.py` | ChromaDB 集合管理 + 文档存储/删除 |
 | `rag/retriever.py` | 语义检索 |
@@ -70,7 +70,7 @@ _IMG_PLACEHOLDER regex → get_image_by_id() → ![alt](/api/images/doc_id/img.p
 | `RAG_CHUNK_OVERLAP` | `50` | 分块重叠 |
 | `RAG_TOP_K` | `5` | 默认检索数量 |
 
-图片描述使用 `.env` 中配置的 `GEMINI_CHAT_MODEL`（如 `gemini-3-flash-preview`）。
+图片描述使用 `.env` 中配置的 `MIMO_VISION_MODEL`（`mimo-v2.6`，不是 Pro）。
 
 ## 数据存储
 

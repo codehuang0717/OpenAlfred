@@ -7,9 +7,18 @@ from datetime import datetime, timezone
 from logic.schema import TodoDict
 from db.connection import get_db
 from core.event_bus import event_bus, EventType
+from utils.auth_utils import require_explicit_user_id
+from utils.time_utils import localize_to_utc
 
 
-async def get_all_todos(user_id: str = "default") -> list[TodoDict]:
+def _normalize_todo_time(value: Optional[str]) -> Optional[str]:
+    if value is None or value == "":
+        return value
+    return localize_to_utc(value)
+
+
+async def get_all_todos(user_id: str) -> list[TodoDict]:
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         async with db.execute(
             "SELECT * FROM todos WHERE deleted = 0 AND user_id = ? ORDER BY created_at DESC",
@@ -22,14 +31,18 @@ async def get_all_todos(user_id: str = "default") -> list[TodoDict]:
 async def add_todo(
     id: str,
     title: str,
+    *,
+    user_id: str,
     description: str = "",
     emoji: str = "🎯",
     status: str = "pending",
     notes: str = "",
     expected_completion_at: Optional[str] = None,
     scheduled_start_at: Optional[str] = None,
-    user_id: str = "default",
 ):
+    user_id = require_explicit_user_id(user_id)
+    expected_completion_at = _normalize_todo_time(expected_completion_at)
+    scheduled_start_at = _normalize_todo_time(scheduled_start_at)
     created_at = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:
         await db.execute(
@@ -55,13 +68,18 @@ async def add_todo(
 
     await event_bus.publish(EventType.TODO_CREATED, {"id": id, "user_id": user_id})
     if scheduled_start_at:
-        await event_bus.schedule(EventType.TODO_NOTIFICATION_DUE, {"id": id}, scheduled_start_at)
+        await event_bus.schedule(
+            EventType.TODO_NOTIFICATION_DUE,
+            {"id": id, "user_id": user_id},
+            scheduled_start_at,
+        )
 
 
 
 async def update_todo(
     id: str,
-    user_id: str = "default",
+    *,
+    user_id: str,
     title: Optional[str] = None,
     description: Optional[str] = None,
     emoji: Optional[str] = None,
@@ -70,6 +88,9 @@ async def update_todo(
     expected_completion_at: Optional[str] = None,
     scheduled_start_at: Optional[str] = None,
 ):
+    user_id = require_explicit_user_id(user_id)
+    expected_completion_at = _normalize_todo_time(expected_completion_at)
+    scheduled_start_at = _normalize_todo_time(scheduled_start_at)
     updates = []
     params = []
 
@@ -120,14 +141,19 @@ async def update_todo(
     if scheduled_start_at is not None:
         await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
         if scheduled_start_at != "":  # Not clearing the schedule
-            await event_bus.schedule(EventType.TODO_NOTIFICATION_DUE, {"id": id}, scheduled_start_at)
+            await event_bus.schedule(
+                EventType.TODO_NOTIFICATION_DUE,
+                {"id": id, "user_id": user_id},
+                scheduled_start_at,
+            )
             
     if status == "completed":
         await event_bus.unschedule(EventType.TODO_NOTIFICATION_DUE, {"id": id})
     return True
 
 
-async def delete_todo(id: str, user_id: str = "default") -> bool:
+async def delete_todo(id: str, *, user_id: str) -> bool:
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         cursor = await db.execute(
             "UPDATE todos SET deleted = 1 WHERE id = ? AND user_id = ? AND deleted = 0",
@@ -144,12 +170,10 @@ async def delete_todo(id: str, user_id: str = "default") -> bool:
     return True
 
 
-async def get_todo_by_id(id: str, user_id: Optional[str] = None):
-    sql = "SELECT * FROM todos WHERE id = ? AND deleted = 0"
-    params = [id]
-    if user_id is not None:
-        sql += " AND user_id = ?"
-        params.append(user_id)
+async def get_todo_by_id(id: str, *, user_id: str):
+    user_id = require_explicit_user_id(user_id)
+    sql = "SELECT * FROM todos WHERE id = ? AND deleted = 0 AND user_id = ?"
+    params = [id, user_id]
 
     async with get_db() as db:
         async with db.execute(
@@ -173,15 +197,19 @@ async def get_pending_todo_notifications():
             return [dict(row) for row in rows]
 
 
-async def mark_todo_notification_sent(id: str) -> bool:
+async def mark_todo_notification_sent(id: str, *, user_id: str) -> bool:
     """Mark a todo notification as sent. Returns True if actually updated (idempotent)."""
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         cursor = await db.execute(
-            "UPDATE todos SET notification_sent = 1 WHERE id = ? AND notification_sent = 0",
-            (id,),
+            "UPDATE todos SET notification_sent = 1 WHERE id = ? AND user_id = ? AND notification_sent = 0",
+            (id, user_id),
         )
         await db.commit()
         updated = cursor.rowcount > 0
         if updated:
-            await event_bus.publish(EventType.TODO_UPDATED, {"id": id, "notification_sent": 1})
+            await event_bus.publish(
+                EventType.TODO_UPDATED,
+                {"id": id, "user_id": user_id, "notification_sent": 1},
+            )
         return updated

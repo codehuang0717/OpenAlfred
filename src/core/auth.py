@@ -11,6 +11,7 @@ import jwt
 from utils.logger import get_logger
 from langgraph_sdk import Auth
 from core.config import config
+from utils.auth_utils import MissingUserContextError, require_config_value, require_explicit_user_id
 
 logger = get_logger("auth")
 
@@ -41,10 +42,13 @@ async def authenticate_user(
         raise Auth.exceptions.HTTPException(status_code=401, detail="Invalid authorization scheme")
 
     try:
-        payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+        secret = require_config_value("JWT_SECRET", config.JWT_SECRET)
+        payload = jwt.decode(token, secret, algorithms=[config.JWT_ALGORITHM])
         user_id = payload.get("sub")
         username = payload.get("username", "")
-        if not user_id:
+        try:
+            user_id = require_explicit_user_id(user_id)
+        except MissingUserContextError:
             raise Auth.exceptions.HTTPException(status_code=401, detail="Invalid token payload")
     except jwt.ExpiredSignatureError:
         raise Auth.exceptions.HTTPException(status_code=401, detail="Token expired")

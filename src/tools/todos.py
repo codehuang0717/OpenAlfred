@@ -1,15 +1,13 @@
 import uuid
 from typing import Optional, Literal
-from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel
 from langchain.tools import ToolRuntime, tool
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 from logic.schema import AgentState, TodoDict
 from utils.time_utils import localize_to_utc
+from utils.auth_utils import require_explicit_user_id, require_runtime_user_id
 from core.database import (
     get_all_todos,
-    get_active_user,
     add_todo as db_add_todo,
     update_todo as db_update_todo,
     delete_todo as db_delete_todo,
@@ -17,43 +15,13 @@ from core.database import (
 
 
 async def _get_user_id(runtime: ToolRuntime) -> str:
-    """Extract user_id from RunnableConfig populated by LangGraph Auth or custom metadata."""
-    if hasattr(runtime, "config") and runtime.config:
-        conf = runtime.config.get("configurable", {})
-        
-        # 1. LangGraph Auth (Service JWT sub)
-        auth_user = conf.get("langgraph_auth_user", {})
-        if isinstance(auth_user, dict) and "identity" in auth_user:
-            return auth_user["identity"]
-            
-        # 2. Trusted service/voice ownership fields
-        if "owner" in conf: return conf["owner"]
-        if "thread_owner" in conf: return conf["thread_owner"]
-
-        # 3. Request Metadata (Passed in runs/wait body)
-        metadata = runtime.config.get("metadata", {})
-        if "owner" in metadata:
-            return metadata["owner"]
-
-    # 4. Global Fallback: Query the currently active user from DB (Last Resort)
-    try:
-        active_user = await get_active_user()
-        if active_user:
-            return active_user["id"]
-    except Exception:
-        pass
-
-    # Fallback to state payload
-    if hasattr(runtime, "state") and runtime.state:
-        if isinstance(runtime.state, dict):
-            return runtime.state.get("user_id", "default")
-        return getattr(runtime.state, "user_id", "default")
-    return "default"
+    """Extract a verified user_id from LangGraph request metadata."""
+    return require_runtime_user_id(runtime)
 
 
 async def initialize_todos(state: AgentState) -> dict:
     """Initialize todos from database on agent startup."""
-    user_id = state.user_id if hasattr(state, "user_id") else "default"
+    user_id = require_explicit_user_id(getattr(state, "user_id", ""))
     todos = await get_all_todos(user_id=user_id)
     return {"todos": todos}
 
@@ -89,15 +57,9 @@ async def get_todos(
         utc_from = None
         utc_to = None
         if date_from:
-            try:
-                utc_from = parse_to_aware_utc(localize_to_utc(date_from))
-            except Exception:
-                pass
+            utc_from = parse_to_aware_utc(localize_to_utc(date_from))
         if date_to:
-            try:
-                utc_to = parse_to_aware_utc(localize_to_utc(date_to))
-            except Exception:
-                pass
+            utc_to = parse_to_aware_utc(localize_to_utc(date_to))
         
         filtered = []
         for t in todos:
@@ -107,16 +69,13 @@ async def get_todos(
             for tf in time_fields:
                 if not tf:
                     continue
-                try:
-                    t_dt = parse_to_aware_utc(tf)
-                    if utc_from and t_dt < utc_from:
-                        continue
-                    if utc_to and t_dt > utc_to:
-                        continue
-                    matched = True
-                    break
-                except Exception:
+                t_dt = parse_to_aware_utc(tf)
+                if utc_from and t_dt < utc_from:
                     continue
+                if utc_to and t_dt > utc_to:
+                    continue
+                matched = True
+                break
             # When date filtering is active, skip todos without any time field
             if matched:
                 filtered.append(t)
@@ -149,21 +108,8 @@ async def add_todo(
     id = str(uuid.uuid4())
     
     # Standardize time if provided
-    formatted_time = expected_completion_at
-    if expected_completion_at:
-        try:
-            formatted_time = localize_to_utc(expected_completion_at)
-        except Exception as e:
-            # Fallback to original or handle error - for high availability, we log and keep 
-            # if LLM produced something truly weird, but our tool description should prevent this.
-            pass
-
-    formatted_start_time = scheduled_start_at
-    if scheduled_start_at:
-        try:
-            formatted_start_time = localize_to_utc(scheduled_start_at)
-        except:
-            pass
+    formatted_time = localize_to_utc(expected_completion_at) if expected_completion_at else None
+    formatted_start_time = localize_to_utc(scheduled_start_at) if scheduled_start_at else None
 
     await db_add_todo(
         id=id,
@@ -206,16 +152,10 @@ async def update_todo(
     
     # Standardize time if provided
     if expected_completion_at:
-        try:
-            expected_completion_at = localize_to_utc(expected_completion_at)
-        except:
-            pass
+        expected_completion_at = localize_to_utc(expected_completion_at)
 
     if scheduled_start_at:
-        try:
-            scheduled_start_at = localize_to_utc(scheduled_start_at)
-        except:
-            pass
+        scheduled_start_at = localize_to_utc(scheduled_start_at)
 
     await db_update_todo(
         id=id,

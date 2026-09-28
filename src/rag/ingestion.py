@@ -4,6 +4,7 @@ from rag.chunker import chunk_text, chunk_sections, is_markdown
 from rag.md_parser import parse_markdown
 from rag.store import store_document
 from utils.logger import get_logger
+from utils.auth_utils import require_explicit_user_id
 
 logger = get_logger("rag.ingestion")
 
@@ -46,6 +47,7 @@ async def ingest_file(user_id: str, filepath: str, title: str = "", progress_cal
     """Ingest a single file into the RAG knowledge base.
     For .md files, auto-detects source directory for image resolution.
     """
+    user_id = require_explicit_user_id(user_id)
     path = Path(filepath)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
@@ -108,6 +110,7 @@ async def ingest_markdown_file(
     3. Chunk by sections (keeping text+images together)
     4. Store in ChromaDB + SQLite
     """
+    user_id = require_explicit_user_id(user_id)
     logger.info("Ingesting markdown: title=%r chars=%d source_dir=%s", title, len(content), source_dir)
     if progress_callback: progress_callback("parsing", 20)
 
@@ -126,7 +129,9 @@ async def ingest_markdown_file(
 
         for sec in sections:
             if sec.images:
-                sec.text = await process_section_images(sec.text, source_dir, doc_id)
+                sec.text = await process_section_images(
+                    sec.text, source_dir, doc_id, user_id
+                )
                 logger.debug("Section '%s': processed %d images", sec.heading, len(sec.images))
 
         logger.info("Image processing complete for document %s", doc_id)
@@ -167,6 +172,7 @@ async def _store_with_id(
     progress_callback = None,
 ) -> dict:
     """Store document with a pre-generated ID (needed for image path matching)."""
+    user_id = require_explicit_user_id(user_id)
     from rag.embedding import embed_texts
     from rag.store import _get_collection
 
@@ -232,6 +238,7 @@ async def _store_with_id(
 
 async def ingest_text(user_id: str, text: str, title: str) -> dict:
     """Ingest raw text into the RAG knowledge base."""
+    user_id = require_explicit_user_id(user_id)
     if not text.strip():
         raise ValueError("Text is empty")
 

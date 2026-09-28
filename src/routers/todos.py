@@ -1,6 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from utils.time_utils import localize_to_utc
 
 from core.database import (
     get_all_todos,
@@ -19,6 +20,13 @@ class TodoUpdateRequest(BaseModel):
     notes: Optional[str] = None
     expected_completion_at: Optional[str] = None
     scheduled_start_at: Optional[str] = None
+
+    @field_validator("expected_completion_at", "scheduled_start_at")
+    @classmethod
+    def validate_time(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return value
+        return localize_to_utc(value)
 
 
 @router.get("")

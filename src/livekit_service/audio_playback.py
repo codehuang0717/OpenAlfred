@@ -13,6 +13,36 @@ from core.database import AUDIO_CACHE_DIR
 
 logger = get_logger("livekit-audio")
 
+_FRAME_SAMPLES = 480  # 20ms @ 24kHz
+
+
+def _make_tts_source() -> rtc.AudioSource:
+    # Hold jitter inside LiveKit's capture queue, not in a Python keep-buffer.
+    try:
+        return rtc.AudioSource(24000, 1, queue_size_ms=2000)
+    except TypeError:
+        return rtc.AudioSource(24000, 1)
+
+
+async def _push_int16_frames(source: rtc.AudioSource, pcm: bytes, interrupt_event: asyncio.Event) -> int:
+    audio_np = np.frombuffer(pcm, dtype=np.int16)
+    pushed = 0
+    for i in range(0, len(audio_np), _FRAME_SAMPLES):
+        if interrupt_event.is_set():
+            break
+        chunk = audio_np[i : i + _FRAME_SAMPLES]
+        if len(chunk) == 0:
+            continue
+        frame = rtc.AudioFrame(
+            data=chunk.tobytes(),
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=len(chunk),
+        )
+        await source.capture_frame(frame)
+        pushed += len(chunk)
+    return pushed
+
 async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event, start_event: asyncio.Event = None):
     """Generate and play TTS audio in the LiveKit room.
 
@@ -37,20 +67,34 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
 
         jitter_buffer_bytes = b""
         jitter_threshold_bytes = int(24000 * (config.TTS_JITTER_BUFFER_MS / 1000) * 2)
+        jitter_threshold_bytes -= jitter_threshold_bytes % 2
         playback_started = False
         total_samples_pushed = 0
         start_time = 0
+        t_last_recv = t0
+        underrun_warns = 0
 
         async for audio_chunk in get_tts_stream(text, target_sample_rate=24000):
             if interrupt_event.is_set():
                 logger.info("[VoiceInterrupt] TTS audio playback aborted due to interrupt during stream.")
                 break
 
+            now = time.time()
+            gap_ms = (now - t_last_recv) * 1000
+            audio_ms = len(audio_chunk) / 2 / 24000 * 1000
+            if first_chunk_found and gap_ms > audio_ms + 40:
+                underrun_warns += 1
+                logger.warning(
+                    f"[TIMING][TTS] NET_GAP | gap={gap_ms:.0f}ms audio={audio_ms:.0f}ms "
+                    f"buf={len(jitter_buffer_bytes) / 48:.0f}ms"
+                )
+            t_last_recv = now
+
             if not first_chunk_found:
                 latency_tracker.end("tts_first_chunk")
                 latency_tracker.end("tts_generate")
                 t_first = time.time()
-                logger.info(f"[TIMING][TTS] FIRST_CHUNK | dt={t_first - t0:.3f}s")
+                logger.info(f"[TIMING][TTS] FIRST_CHUNK | dt={t_first - t0:.3f}s bytes={len(audio_chunk)}")
                 first_chunk_found = True
 
             if defer_playback and not start_event.is_set():
@@ -62,7 +106,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 t_pub = time.time()
                 logger.info(f"[TIMING][TTS] START_EVENT_FIRED | prefetch_bytes={len(prefetch_buffer)} | dt={t_pub - t0:.3f}s")
                 if source is None:
-                    source = rtc.AudioSource(24000, 1)
+                    source = _make_tts_source()
                     track = rtc.LocalAudioTrack.create_audio_track("tts", source)
                     publication = await room.local_participant.publish_track(track)
                     logger.info(f"[TIMING][TTS] TRACK_PUBLISHED | dt={time.time() - t0:.3f}s")
@@ -74,7 +118,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
 
             # Lazy publish: defer track creation until ready to play
             if source is None:
-                source = rtc.AudioSource(24000, 1)
+                source = _make_tts_source()
                 track = rtc.LocalAudioTrack.create_audio_track("tts", source)
                 publication = await room.local_participant.publish_track(track)
                 logger.info(f"[TIMING][TTS] TRACK_PUBLISHED | dt={time.time() - t0:.3f}s")
@@ -83,30 +127,26 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
 
             if not playback_started and len(jitter_buffer_bytes) >= jitter_threshold_bytes:
                 t_play = time.time()
-                logger.info(f"[TIMING][TTS] PLAYBACK_START | dt={t_play - t0:.3f}s")
+                logger.info(
+                    f"[TIMING][TTS] PLAYBACK_START | dt={t_play - t0:.3f}s "
+                    f"buf={len(jitter_buffer_bytes) / 48:.0f}ms"
+                )
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
                 playback_started = True
                 start_time = t_play
 
-            if playback_started:
-                audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
-                jitter_buffer_bytes = b""
-
-                chunk_size = 480
-                for i in range(0, len(audio_np), chunk_size):
-                    if interrupt_event.is_set():
-                        break
-                    chunk = audio_np[i : i + chunk_size]
-                    if len(chunk) > 0:
-                        frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                        await source.capture_frame(frame)
-                        total_samples_pushed += len(chunk)
+            if playback_started and source is not None:
+                available = len(jitter_buffer_bytes) - (len(jitter_buffer_bytes) % 2)
+                if available > 0:
+                    to_play = jitter_buffer_bytes[:available]
+                    jitter_buffer_bytes = jitter_buffer_bytes[available:]
+                    total_samples_pushed += await _push_int16_frames(source, to_play, interrupt_event)
 
         # Flush prefetched audio if we deferred
         if defer_playback and len(prefetch_buffer) > 0 and not interrupt_event.is_set():
             if source is None:
-                source = rtc.AudioSource(24000, 1)
+                source = _make_tts_source()
                 track = rtc.LocalAudioTrack.create_audio_track("tts", source)
                 publication = await room.local_participant.publish_track(track)
                 logger.info(f"DEBUG-PUBLISHING: Published NEW TTS track (deferred): {publication.sid}")
@@ -143,7 +183,10 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
 
         if playback_started:
             latency_tracker.end("tts_audio_stream")
-            logger.info(f"[TIMING][TTS] STREAM_DONE | total_samples={total_samples_pushed} | dt={time.time() - t0:.3f}s")
+            logger.info(
+                f"[TIMING][TTS] STREAM_DONE | total_samples={total_samples_pushed} "
+                f"underrun_warns={underrun_warns} | dt={time.time() - t0:.3f}s"
+            )
 
         # Wait for audio to drain
         if total_samples_pushed > 0 and not interrupt_event.is_set():
@@ -165,7 +208,12 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
             logger.info("Termination signal detected in Agent response. Hanging up...")
             should_exit_event.set()
 
-async def play_greeting(room: rtc.Room, initial_speech: str = "", should_exit_event: asyncio.Event = None, user_id: str = "default", call_type: str = "inbound"):
+async def play_greeting(
+    room: rtc.Room,
+    initial_speech: str = "",
+    should_exit_event: asyncio.Event = None,
+    call_type: str = "inbound",
+):
     """Play the greeting. Prioritize pre-rendered wav if available, otherwise TTS."""
     
     # 1. Check for specific pre-rendered wav file first

@@ -166,14 +166,36 @@ async def get_thread_messages(
     result = []
     current_ai_msg = None
 
+    def _plain_text(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    parts.append(str(block.get("text") or block.get("refusal") or ""))
+            return "".join(parts)
+        return str(content or "")
+
+    def _flush_ai():
+        nonlocal current_ai_msg
+        if not current_ai_msg:
+            return
+        texts = [
+            s["content"] for s in current_ai_msg.get("steps", [])
+            if s.get("type") == "text" and s.get("content")
+        ]
+        current_ai_msg["content"] = texts[-1] if texts else current_ai_msg.get("content", "")
+        result.append(current_ai_msg)
+        current_ai_msg = None
+
     for msg in messages:
         msg_type = msg.get("type", "")
 
         if msg_type == "human":
-            if current_ai_msg:
-                result.append(current_ai_msg)
-                current_ai_msg = None
-
+            _flush_ai()
             result.append({
                 "id": msg.get("id", ""),
                 "role": "user",
@@ -186,34 +208,48 @@ async def get_thread_messages(
                     "id": msg.get("id", ""),
                     "role": "assistant",
                     "content": "",
+                    "steps": [],
                     "tools": [],
                 }
 
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                text = "".join(
-                    block.get("text", "") if isinstance(block, dict) else str(block)
-                    for block in content
-                )
-                content = text
+            text = _plain_text(msg.get("content", ""))
+            if text.strip():
+                current_ai_msg["steps"].append({
+                    "type": "text",
+                    "id": msg.get("id") or f"text-{len(current_ai_msg['steps'])}",
+                    "content": text,
+                })
 
-            if content and content.strip():
-                if current_ai_msg["content"]:
-                    current_ai_msg["content"] += "\n" + content
-                else:
-                    current_ai_msg["content"] = content
-
-            tool_calls = msg.get("tool_calls", [])
+            tool_calls = msg.get("tool_calls", []) or []
+            tools_step = []
             for tc in tool_calls:
                 name = tc.get("name", "")
-                if name:
-                    current_ai_msg["tools"].append({
-                        "name": name,
-                        "status": "done"
-                    })
+                if not name:
+                    continue
+                entry = {
+                    "id": tc.get("id") or "",
+                    "name": name,
+                    "status": "done",
+                }
+                tools_step.append(entry)
+                current_ai_msg["tools"].append(entry)
+            if tools_step:
+                current_ai_msg["steps"].append({
+                    "type": "tools",
+                    "id": f"tools-{msg.get('id') or len(current_ai_msg['steps'])}",
+                    "tools": tools_step,
+                })
 
-    if current_ai_msg:
-        result.append(current_ai_msg)
+        elif msg_type == "tool" and current_ai_msg and msg.get("status") != "error":
+            from services.generated_images import image_markdown
+            image = image_markdown(msg.get("artifact"))
+            if image:
+                current_ai_msg["steps"].append({
+                    "type": "text", "id": f"image-{msg.get('tool_call_id')}",
+                    "content": image,
+                })
+
+    _flush_ai()
 
     return result
 
@@ -254,7 +290,7 @@ async def generate_thread_title(
         from langchain_core.messages import HumanMessage
 
         title_prompt = ctx_manager.build_title_prompt(first_user_msg)
-        llm = get_model("gpt-cloud")
+        llm = get_model("mimo-v2.6")
         result = await llm.ainvoke([HumanMessage(content=title_prompt)])
         title = result.content.strip().strip('"\'')[:20]
 

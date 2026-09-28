@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -11,6 +12,7 @@ from routers.auth import get_current_user
 from db.rag import get_documents, get_document_by_id
 from rag.ingestion import ingest_text, ingest_markdown_file, ingest_file
 from rag.retriever import search
+from rag.embedding import embedding_ready, get_embedding_model
 from rag.store import delete_document as delete_document_full
 from rag.image_handler import IMAGES_DIR
 
@@ -132,16 +134,16 @@ async def list_documents(user: dict = Depends(get_current_user)):
 
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str, user: dict = Depends(get_current_user)):
-    doc = await get_document_by_id(doc_id)
-    if not doc or doc["user_id"] != user["id"]:
+    doc = await get_document_by_id(doc_id, user_id=user["id"])
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
 
 
 @router.delete("/documents/{doc_id}")
 async def remove_document(doc_id: str, user: dict = Depends(get_current_user)):
-    doc = await get_document_by_id(doc_id)
-    if not doc or doc["user_id"] != user["id"]:
+    doc = await get_document_by_id(doc_id, user_id=user["id"])
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await delete_document_full(user["id"], doc_id)
     return {"status": "deleted"}
@@ -153,7 +155,13 @@ async def remove_document(doc_id: str, user: dict = Depends(get_current_user)):
 async def search_docs(req: SearchRequest, user: dict = Depends(get_current_user)):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query is empty")
-    results = search(user["id"], req.query, req.top_k)
+    if not embedding_ready():
+        asyncio.get_running_loop().run_in_executor(None, get_embedding_model)
+        raise HTTPException(
+            status_code=503,
+            detail="Embedding model is loading, please retry",
+        )
+    results = await asyncio.to_thread(search, user["id"], req.query, req.top_k)
     return {"query": req.query, "results": results}
 
 
@@ -321,8 +329,8 @@ async def ingest_text_api(req: IngestTextRequest, user: dict = Depends(get_curre
 
 @images_router.get("/{doc_id}/{filename}")
 async def serve_image(doc_id: str, filename: str, user: dict = Depends(get_current_user)):
-    doc = await get_document_by_id(doc_id)
-    if not doc or doc["user_id"] != user["id"]:
+    doc = await get_document_by_id(doc_id, user_id=user["id"])
+    if not doc:
         raise HTTPException(status_code=404, detail="Image not found")
 
     safe_filename = Path(filename).name

@@ -2,12 +2,14 @@ from rag.embedding import embed_query
 from rag.store import _get_collection
 from core.config import config
 from utils.logger import get_logger
+from utils.auth_utils import require_explicit_user_id
 
 logger = get_logger("rag.retriever")
 
 
 def search(user_id: str, query: str, top_k: int | None = None) -> list[dict]:
     """Search the user's knowledge base and return relevant chunks."""
+    user_id = require_explicit_user_id(user_id)
     if top_k is None:
         top_k = config.RAG_TOP_K
 

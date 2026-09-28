@@ -20,6 +20,7 @@ logs/
 
 # Local data & assets
 agent_chrome_profile/
+cloud_deploy/
 src/body/windows_system/eye/data/
 
 # Testing
@@ -32,4 +33,5 @@ chroma_db/
 assets/audio_cache/
 assets/custom_samples
 src/core/__pycache__/
-cloud_deploy/
+memory/
+src/*/__pycache__/

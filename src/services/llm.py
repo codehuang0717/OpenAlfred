@@ -18,6 +18,8 @@ def _create_gpt_model() -> BaseChatModel:
     return ChatOpenAI(
         model=config.CLOUD_CHAT_MODEL,
         api_key=config.OPENAI_API_KEY,
+        streaming=True,
+        use_responses_api=True,
     )
 
 
@@ -29,6 +31,7 @@ def _create_cerebras_model() -> BaseChatModel:
         model=config.CEREBRAS_CHAT_MODEL,
         base_url=CEREBRAS_BASE_URL,
         api_key=config.CEREBRAS_API_KEY,
+        streaming=True,
     )
 
 
@@ -40,6 +43,7 @@ def _create_deepseek_model() -> BaseChatModel:
         model=config.DEEPSEEK_FLASH_MODEL,
         base_url=DEEPSEEK_BASE_URL,
         api_key=config.DEEPSEEK_API_KEY,
+        streaming=True,
     )
 
 
@@ -51,6 +55,7 @@ def _create_deepseek_pro_model() -> BaseChatModel:
         model=config.DEEPSEEK_PRO_MODEL,
         base_url=DEEPSEEK_BASE_URL,
         api_key=config.DEEPSEEK_API_KEY,
+        streaming=True,
     )
 
 
@@ -80,6 +85,20 @@ def _create_mimo_model() -> BaseChatModel:
         model=config.MIMO_CHAT_MODEL,
         base_url=MIMO_BASE_URL,
         api_key=config.MIMO_API_KEY,
+        streaming=True,
+    )
+
+
+def _create_mimo_v25_model() -> BaseChatModel:
+    """Non-pro MiMo (mimo-v2.6) for cheap tasks like thread titles."""
+    if not config.MIMO_API_KEY:
+        logger.warning("MIMO_API_KEY not set, falling back to GPT")
+        return _create_gpt_model()
+    return ChatOpenAI(
+        model="mimo-v2.6",
+        base_url=MIMO_BASE_URL,
+        api_key=config.MIMO_API_KEY,
+        streaming=True,
     )
 
 
@@ -103,7 +122,47 @@ _factories = {
     "deepseek": _create_deepseek_model,
     "deepseek-pro": _create_deepseek_pro_model,
     "mimo": _create_mimo_model,
+    "mimo-v2.6": _create_mimo_v25_model,
 }
+
+
+def get_strict_model(selection: str) -> BaseChatModel:
+    """Explicit provider for safety-critical compaction; never change provider on failure."""
+    keys = {
+        "gpt-cloud": "OPENAI_API_KEY", "cerebras": "CEREBRAS_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY", "deepseek-pro": "DEEPSEEK_API_KEY",
+        "mimo": "MIMO_API_KEY", "mimo-v2.6": "MIMO_API_KEY", "gemini": "GOOGLE_API_KEY",
+    }
+    if selection not in _factories:
+        raise ValueError(f"Unknown model selection: {selection}")
+    if selection in keys and not getattr(config, keys[selection]):
+        raise ValueError(f"{keys[selection]} is required for {selection}")
+    if selection == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(model=config.GEMINI_CHAT_MODEL, google_api_key=config.GOOGLE_API_KEY, max_retries=0)
+    if selection == "gemma-local":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=config.LOCAL_MODEL_NAME, base_url=config.OLLAMA_BASE_URL)
+    model = _factories[selection]()
+    model.max_retries = 0
+    # Factories construct SDK clients eagerly; changing only the LangChain
+    # field does not change the SDK's already-initialized retry setting.
+    model.root_client.max_retries = 0
+    model.root_async_client.max_retries = 0
+    return model
+
+
+def output_limit_kwargs(selection: str, tokens: int) -> dict:
+    """Provider-specific output cap matching the context planner's reserve."""
+    if selection == "gemini":
+        return {"max_output_tokens": tokens}
+    if selection == "gemma-local":
+        return {"num_predict": tokens}
+    if selection == "gpt-cloud":
+        return {"max_completion_tokens": tokens}
+    if selection in _factories:
+        return {"max_tokens": tokens}
+    raise ValueError(f"Unknown model selection: {selection}")
 
 
 def get_model(selection: str = "gpt-cloud") -> BaseChatModel:

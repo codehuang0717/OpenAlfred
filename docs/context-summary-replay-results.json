@@ -1,0 +1,68 @@
+{
+  "probe_version": 3,
+  "scenario": "incremental_summary_replay",
+  "model": "mimo-v2.6-pro",
+  "calls": [
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 581,
+      "output_tokens": 1478,
+      "cache_read_tokens": 576,
+      "call_elapsed_ms": 20029,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "summary_replay/stage1",
+      "kind": "summary"
+    },
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 468,
+      "output_tokens": 2750,
+      "cache_read_tokens": 0,
+      "call_elapsed_ms": 30712,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "summary_replay/stage2",
+      "kind": "summary"
+    },
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 5588,
+      "output_tokens": 54,
+      "cache_read_tokens": 0,
+      "call_elapsed_ms": 2991,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "summary_replay/main1",
+      "kind": "main",
+      "first_text_ms": 2855,
+      "answer": "SHORT-427",
+      "finish_reason": "stop",
+      "tool_calls_returned": 0,
+      "correct": true
+    },
+    {
+      "event": "context.model_usage",
+      "model": "mimo",
+      "input_tokens": 5588,
+      "output_tokens": 147,
+      "cache_read_tokens": 5568,
+      "call_elapsed_ms": 3231,
+      "source": "provider_reported; missing values are null; elapsed is not TTFT",
+      "phase": "summary_replay/main2",
+      "kind": "main",
+      "first_text_ms": 3121,
+      "answer": "SHORT-427",
+      "finish_reason": "stop",
+      "tool_calls_returned": 0,
+      "correct": true
+    }
+  ],
+  "summary_final_limit": 1600,
+  "summary_generation_limit": 4096,
+  "stored_summary_tokens": [
+    157,
+    168
+  ],
+  "requests_attempted": 4
+}

@@ -1,11 +1,11 @@
 import httpx
 import json
 import asyncio
-import numpy as np
 import logging
 import wave
-import io
 import os
+import time
+import numpy as np
 from typing import AsyncGenerator
 from core.config import config
 
@@ -26,8 +26,10 @@ async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGen
     }
 
     try:
+        t_prev = None
+        timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient() as client:
-            async with client.stream("POST", url, json=payload, timeout=30.0) as response:
+            async with client.stream("POST", url, json=payload, timeout=timeout) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
                     logger.error(f"TTS Request failed: {response.status_code}, {error_text}")
@@ -35,13 +37,23 @@ async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGen
 
                 # PCM data from service is 16-bit LE, Mono
                 # Buffer for incomplete frames if needed, but PCM usually datang in chunks of bytes
-                async for chunk in response.aiter_bytes(chunk_size=4096):
+                async for chunk in response.aiter_bytes(chunk_size=19200):
                     if not chunk:
                         continue
-                    
-                    # Convert bytes to int16 numpy array
-                    audio_np = np.frombuffer(chunk, dtype=np.int16)
-                    yield audio_np.tobytes()
+                    now = time.perf_counter()
+                    if t_prev is not None:
+                        gap_ms = (now - t_prev) * 1000
+                        audio_ms = len(chunk) / 2 / target_sample_rate * 1000
+                        if gap_ms > audio_ms + 50:
+                            logger.warning(
+                                "TTS recv gap=%.0fms audio=%.0fms (producer slower than playback)",
+                                gap_ms,
+                                audio_ms,
+                            )
+                    else:
+                        logger.info("TTS first network bytes=%d", len(chunk))
+                    t_prev = now
+                    yield chunk
 
                 # Final padding: 250ms of silence to ensure the last word isn't cut off by audio pipelines
                 silence_padding = np.zeros(int(target_sample_rate * 0.25), dtype=np.int16)

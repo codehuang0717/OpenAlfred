@@ -36,6 +36,10 @@ class EventType(str, Enum):
     # Todo notification events
     TODO_NOTIFICATION_DUE = "todo.notification_due"
 
+    # Generated user panels
+    USER_APP_UPDATED = "user_app.updated"
+    USER_APP_DELETED = "user_app.deleted"
+
     # Supervisor events
     SUPERVISOR_STATE_CHANGED = "supervisor.state_changed"
     SUPERVISOR_WAKEUP = "supervisor.wakeup"

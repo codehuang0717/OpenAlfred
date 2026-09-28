@@ -25,6 +25,8 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit import rtc
 from core.database import init_db
 from utils.logger import setup_logging, get_logger
+from utils.auth_utils import require_explicit_user_id
+from utils.voice_context import extract_outbound_user_id
 
 # Import decoupled components
 from livekit_service.agent_client import _ensure_thread, session_metadata_cache
@@ -112,14 +114,7 @@ async def entrypoint(ctx: JobContext):
 
     if call_type == "outbound":
         # Outbound: user_id embedded in room name by dial_user()
-        if room.name.startswith("outbound-reminder-"):
-            user_id = room.name[18 + 36 + 1:] or "default"
-        elif room.name.startswith("outbound-supervisor-"):
-            parts = room.name.split("-")
-            user_id = "-".join(parts[3:]) if len(parts) >= 4 else "default"
-        else:
-            parts = room.name.split("-")
-            user_id = "-".join(parts[1:-1]) if len(parts) >= 3 else "default"
+        user_id = extract_outbound_user_id(room.name)
         logger.info(f"[outbound] user_id={user_id}")
 
     elif call_type == "local":
@@ -132,6 +127,9 @@ async def entrypoint(ctx: JobContext):
                 logger.info(f"[local] user_id={user_id} username={active.get('username')}")
         except Exception as e:
             logger.error(f"[local] resolve failed: {e}")
+            raise
+        if not user_id:
+            raise RuntimeError("No active user is available for the local voice session")
 
     else:
         # Inbound: DO NOT pre-assign — resolve from SIP participant
@@ -146,7 +144,8 @@ async def entrypoint(ctx: JobContext):
     }[call_type]
 
     if call_type != "inbound":
-        thread_info = await _ensure_thread(unique_session_id, user_id or "default", call_title, call_type)
+        user_id = require_explicit_user_id(user_id)
+        thread_info = await _ensure_thread(unique_session_id, user_id, call_title, call_type)
         initial_speech = thread_info.get("initial_speech", "")
 
     session_metadata_cache[room.name] = {
@@ -244,8 +243,8 @@ async def entrypoint(ctx: JobContext):
                     session_obj.is_greeting_playing = True
 
                 try:
-                    await play_greeting(room, current_speech, should_exit,
-                                       user_id or "default", call_type)
+                    require_explicit_user_id(user_id)
+                    await play_greeting(room, current_speech, should_exit, call_type)
                 finally:
                     if session_obj and hasattr(session_obj, 'is_greeting_playing'):
                         session_obj.is_greeting_playing = False
@@ -255,7 +254,8 @@ async def entrypoint(ctx: JobContext):
     def make_voice_session(participant):
         """Create a VoiceSession with the CURRENT user_id."""
         is_sip = participant.identity.startswith("sip_")
-        return VoiceSession(room, should_exit, user_id or "default",
+        resolved_user_id = require_explicit_user_id(user_id)
+        return VoiceSession(room, should_exit, resolved_user_id,
                            is_sip=is_sip, answered_event=answered_event)
 
     # ── Room event handlers ────────────────────────────────────────
@@ -283,6 +283,10 @@ async def entrypoint(ctx: JobContext):
     async def _on_inbound_participant(p: rtc.RemoteParticipant):
         """Inbound participant lifecycle: resolve user → subscribe audio."""
         await resolve_inbound_user(p)
+        if not user_id:
+            logger.error("[inbound-resolve] ending unidentified inbound call")
+            should_exit.set()
+            return
         await subscribe_to_audio(p)
 
     @room.on("participant_attributes_changed")
@@ -360,10 +364,10 @@ async def entrypoint(ctx: JobContext):
         except asyncio.TimeoutError:
             logger.warning("[outbound] greeting_event timed out after 30s")
             should_exit.set()
-            return
-        logger.info("[outbound] greeting_event set, playing greeting")
-        await asyncio.sleep(0.3)
-        await trigger_greeting()
+        else:
+            logger.info("[outbound] greeting_event set, playing greeting")
+            await asyncio.sleep(0.3)
+            await trigger_greeting()
     else:
         asyncio.create_task(trigger_greeting())
 

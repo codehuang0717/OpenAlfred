@@ -34,6 +34,7 @@ async def process_section_images(
     text: str,
     source_dir: str,
     doc_id: str,
+    user_id: str,
 ) -> str:
     """Process images in a section's markdown text.
 
@@ -89,6 +90,7 @@ async def process_section_images(
         # Insert lookup record
         img_id = await add_image_lookup(
             document_id=doc_id,
+            user_id=user_id,
             url=serving_url,
             alt=alt,
             filename=filename,

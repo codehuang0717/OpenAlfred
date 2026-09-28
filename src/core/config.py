@@ -8,7 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 ENV_PATH = PROJECT_ROOT / ".env"
 
-dotenv.load_dotenv(ENV_PATH, override=True)
+dotenv.load_dotenv(ENV_PATH, override=True, encoding="utf-8-sig")
 
 class Config:
     """Central configuration for OpenAlfred."""
@@ -29,7 +29,7 @@ class Config:
     LIVEKIT_URL = os.getenv("LIVEKIT_URL")
     LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
     LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
-    LIVEKIT_SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_TRUNK_ID", "ST_Bcj2LDXqL4J7")
+    LIVEKIT_SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_TRUNK_ID", "")
     
     # Database Settings
     DB_PATH = PROJECT_ROOT / "todos.db"
@@ -41,7 +41,8 @@ class Config:
     # Model Settings
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "gemma4:e2b")
-    CLOUD_CHAT_MODEL = os.getenv("CLOUD_CHAT_MODEL", "gpt-5.4-nano")
+    CLOUD_CHAT_MODEL = os.getenv("CLOUD_CHAT_MODEL", "gpt-6-sol")
+    IMAGE_GENERATION_MODEL = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-2.5-flare")
     CLOUD_BROWSER_MODEL = os.getenv("CLOUD_BROWSER_MODEL", "gpt-5.4-mini")
     CEREBRAS_CHAT_MODEL = os.getenv("CEREBRAS_CHAT_MODEL", "llama-4-scout")
     GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
@@ -50,8 +51,8 @@ class Config:
     DEEPSEEK_PRO_MODEL = os.getenv("DEEPSEEK_PRO_MODEL", "deepseek-v4-pro")
     MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
     MIMO_CHAT_MODEL = os.getenv("MIMO_CHAT_MODEL", "mimo-v2.5-pro")
+    MIMO_VISION_MODEL = os.getenv("MIMO_VISION_MODEL", "mimo-v2.5")
     MEMORY_MODEL_SELECTION = os.getenv("MEMORY_MODEL_SELECTION", "mimo")
-    BARK_URL= os.getenv("BARK_URL", "https://api.day.app/BfQGU76aAZb9rJdWs2tNJW")
 
     # TTS Settings (Faster-Qwen3-TTS)
     TTS_URL = os.getenv("TTS_URL", "http://localhost:7017/v1/audio/speech")
@@ -61,7 +62,7 @@ class Config:
     TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "80"))
 
     # JWT Authentication Settings
-    JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
+    JWT_SECRET = os.getenv("JWT_SECRET", "")
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
 
@@ -73,8 +74,18 @@ class Config:
 
     # Context Management
     MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
-    SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "15"))
-    MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
+    MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "65536"))
+    CONTEXT_OUTPUT_RESERVE = int(os.getenv("CONTEXT_OUTPUT_RESERVE", "4096"))
+    CONTEXT_SAFETY_MARGIN = int(os.getenv("CONTEXT_SAFETY_MARGIN", "2048"))
+    CONTEXT_SUMMARY_TOKENS = int(os.getenv("CONTEXT_SUMMARY_TOKENS", "1600"))
+    CONTEXT_SUMMARY_GENERATION_TOKENS = int(os.getenv("CONTEXT_SUMMARY_GENERATION_TOKENS", "4096"))
+    CONTEXT_SUMMARY_INPUT_TOKENS = int(os.getenv("CONTEXT_SUMMARY_INPUT_TOKENS", "12000"))
+    CONTEXT_TOOL_RESULT_TOKENS = int(os.getenv("CONTEXT_TOOL_RESULT_TOKENS", "1200"))
+    CONTEXT_TOOL_INLINE_TOKENS = int(os.getenv("CONTEXT_TOOL_INLINE_TOKENS", "8192"))
+    CONTEXT_COMPACT_TRIGGER = float(os.getenv("CONTEXT_COMPACT_TRIGGER", "0.90"))
+    CONTEXT_COMPACT_TARGET = float(os.getenv("CONTEXT_COMPACT_TARGET", "0.65"))
+    CONTEXT_IMAGE_TOKENS = int(os.getenv("CONTEXT_IMAGE_TOKENS", "8192"))
+    CONTEXT_SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "mimo")
 
     # Timezone Settings
     TIMEZONE = os.getenv("TIMEZONE", "Europe/London")
@@ -91,6 +102,10 @@ class Config:
 
     # Screenpipe Settings (eye tool)
     SCREENPIPE_URL = os.getenv("SCREENPIPE_URL", "http://localhost:3030")
+    SCREEN_MONITOR_USER_ID = os.getenv("SCREEN_MONITOR_USER_ID", "").strip()
+    SCREENPIPE_EXE = os.getenv("SCREENPIPE_EXE", str(
+        PROJECT_ROOT / "src/body/windows_system/eye/screenpipe-0.3.6-x86_64-pc-windows-msvc/bin/screenpipe.exe"
+    ))
 
     # Greeting TTS Settings
     GREETING_TTS_URL = os.getenv("GREETING_TTS_URL", "http://127.0.0.1:10096/tts/stream")
@@ -100,7 +115,6 @@ class Config:
 
     # Supervisor Settings
     SUPERVISOR_INTERVAL = int(os.getenv("SUPERVISOR_INTERVAL", "600")) # 10 minutes
-    SUPERVISOR_PHONE_NUMBER = os.getenv("SUPERVISOR_PHONE_NUMBER", "100")
     SUPERVISOR_OCR_WINDOW_MINS = int(os.getenv("SUPERVISOR_OCR_WINDOW_MINS", "10"))
 
     # Redis Settings (Event Bus)

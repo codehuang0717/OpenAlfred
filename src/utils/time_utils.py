@@ -1,6 +1,21 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import re
 from zoneinfo import ZoneInfo
 from core.config import config
+
+_END_OF_DAY = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[T ]24:00(?::00(?:[.,]0+)?)?(Z|[+-]\d{2}:\d{2})?$"
+)
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    """Normalize the exact end-of-day notation; reject other invalid hours."""
+    match = _END_OF_DAY.fullmatch(value)
+    if match:
+        day, offset = match.groups()
+        midnight = f"{day}T00:00:00{offset or ''}".replace("Z", "+00:00")
+        return datetime.fromisoformat(midnight) + timedelta(days=1)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 def localize_to_utc(time_str: str) -> str:
     """
@@ -31,14 +46,14 @@ def localize_to_utc(time_str: str) -> str:
     try:
         if clean.endswith('Z'):
             # Already marked as UTC — parse it properly
-            dt = datetime.fromisoformat(clean.replace('Z', '+00:00'))
+            dt = _parse_iso_datetime(clean)
         elif '+' in clean[10:] or (clean.count('-') > 2 and 'T' in clean):
             # Contains an explicit offset like +01:00 or -05:00
-            dt = datetime.fromisoformat(clean)
+            dt = _parse_iso_datetime(clean)
         else:
             # Naive string — interpret as user's configured local timezone
             normalized = clean.replace(' ', 'T') if (' ' in clean and 'T' not in clean) else clean
-            dt_naive = datetime.fromisoformat(normalized)
+            dt_naive = _parse_iso_datetime(normalized)
             user_tz = ZoneInfo(config.TIMEZONE)
             dt = dt_naive.replace(tzinfo=user_tz)
 
@@ -67,9 +82,9 @@ def parse_to_aware_utc(time_str: str) -> datetime:
     clean = time_str.strip()
     
     if clean.endswith('Z'):
-        dt = datetime.fromisoformat(clean.replace('Z', '+00:00'))
+        dt = _parse_iso_datetime(clean)
     else:
-        dt = datetime.fromisoformat(clean)
+        dt = _parse_iso_datetime(clean)
     
     # If naive (no tzinfo), assume UTC (legacy DB entries)
     if dt.tzinfo is None:
@@ -84,15 +99,12 @@ def utc_to_local(utc_str: str) -> str:
     Input:  '2026-05-26T08:00:00Z' or '2026-03-11T09:00:00' (naive)
     Output: '2026-05-26 09:00 (BST)'  (if Europe/London in summer)
     
-    Returns the original string if parsing fails.
+    Raises ValueError if parsing fails.
     """
     if not utc_str:
         return ""
-    try:
-        dt = parse_to_aware_utc(utc_str)
-        user_tz = ZoneInfo(config.TIMEZONE)
-        local_dt = dt.astimezone(user_tz)
-        tz_abbr = local_dt.strftime('%Z')  # e.g. 'BST', 'GMT'
-        return local_dt.strftime(f"%Y-%m-%d %H:%M ({tz_abbr})")
-    except Exception:
-        return utc_str
+    dt = parse_to_aware_utc(utc_str)
+    user_tz = ZoneInfo(config.TIMEZONE)
+    local_dt = dt.astimezone(user_tz)
+    tz_abbr = local_dt.strftime('%Z')  # e.g. 'BST', 'GMT'
+    return local_dt.strftime(f"%Y-%m-%d %H:%M ({tz_abbr})")

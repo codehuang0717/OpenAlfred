@@ -67,13 +67,21 @@ async def get_saved_weather_location(user_id: str) -> dict | None:
     longitude = data.get("longitude")
     if latitude is None or longitude is None:
         return None
+    if (data.get("label") or "").strip() in {"当前位置", "已保存的位置"}:
+        data["label"] = await reverse_geocode_label(latitude, longitude)
+        await set_setting(
+            weather_location_key(user_id),
+            json.dumps(data, ensure_ascii=False),
+        )
     return data
 
 
 async def save_weather_location(user_id: str, location: dict) -> dict:
     label = (location.get("label") or "当前位置").strip() or "当前位置"
     if label in {"当前位置", "已保存的位置"}:
-        label = await reverse_geocode_label(location["latitude"], location["longitude"]) or label
+        label = await reverse_geocode_label(
+            location["latitude"], location["longitude"]
+        )
 
     payload = {
         "latitude": location["latitude"],
@@ -86,30 +94,41 @@ async def save_weather_location(user_id: str, location: dict) -> dict:
     return payload
 
 
-async def reverse_geocode_label(latitude: float, longitude: float) -> str | None:
-    try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            resp = await client.get(
-                REVERSE_GEOCODING_URL,
-                params={
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "localityLanguage": "zh",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception:
-        return None
+async def reverse_geocode_label(latitude: float, longitude: float) -> str:
+    async with httpx.AsyncClient(timeout=6.0) as client:
+        resp = await client.get(
+            REVERSE_GEOCODING_URL,
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+                "localityLanguage": "zh",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-    city = data.get("city") or data.get("locality")
+    label = _format_reverse_geocode_label(data)
+    if not label:
+        raise ValueError("Reverse geocoding returned no recognizable location")
+    return label
+
+
+def _format_reverse_geocode_label(data: dict) -> str:
+    city = data.get("city")
+    locality = data.get("locality")
     principal = data.get("principalSubdivision")
     country = data.get("countryName")
+    if data.get("countryCode") == "CN" or country in {
+        "中华人民共和国",
+        "People's Republic of China",
+        "China",
+    }:
+        country = "中国"
     parts = []
-    for part in (city, principal, country):
+    for part in (city, locality, principal, country):
         if part and part not in parts:
             parts.append(part)
-    return ", ".join(parts) if parts else None
+    return " · ".join(parts)
 
 
 async def clear_weather_location(user_id: str) -> None:
@@ -324,10 +343,10 @@ async def get_weather_summary(
     if not resolved:
         return None
     if (resolved.get("label") or "") in {"当前位置", "已保存的位置"}:
-        label = await reverse_geocode_label(resolved["latitude"], resolved["longitude"])
-        if label:
-            resolved = dict(resolved)
-            resolved["label"] = label
+        resolved = dict(resolved)
+        resolved["label"] = await reverse_geocode_label(
+            resolved["latitude"], resolved["longitude"]
+        )
 
     cache_key = _cache_key(resolved["latitude"], resolved["longitude"])
     now = time.monotonic()

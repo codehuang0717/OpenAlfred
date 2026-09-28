@@ -4,6 +4,7 @@ Now refactored to use modular routers.
 """
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -14,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 
 from core.database import init_db
 from core.event_bus import event_bus
-from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag, memory
+from db.user_apps import fail_interrupted_web_revisions
+from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag, memory, user_apps
+from routers import generated_images
 
 from utils.logger import setup_logging, get_logger
 
@@ -27,9 +30,14 @@ logger = get_logger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    interrupted = await fail_interrupted_web_revisions()
+    if interrupted:
+        logger.warning("Marked %d interrupted responsive revisions as failed", interrupted)
     await event_bus.connect()
 
     logger.info("Database initialized. EventBus connected.")
+    from rag.embedding import get_embedding_model
+    threading.Thread(target=get_embedding_model, daemon=True, name="embed-warmup").start()
 
     yield
 
@@ -75,6 +83,8 @@ app.include_router(events.router)
 app.include_router(rag.router)
 app.include_router(rag.images_router)
 app.include_router(memory.router)
+app.include_router(user_apps.router)
+app.include_router(generated_images.router)
 
 # --- Static Files ---
 

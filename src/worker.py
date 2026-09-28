@@ -45,16 +45,19 @@ async def main():
                 etype = event.get("type")
                 data = event.get("data", {})
                 item_id = data.get("id")
+                user_id = data.get("user_id")
                 
-                if not item_id:
-                    continue
+                if not item_id or not user_id:
+                    raise ValueError(
+                        f"Scheduled event is missing id/user_id: type={etype} data={data}"
+                    )
 
                 if etype == EventType.REMINDER_DUE.value:
                     logger.info(f"Processing scheduled reminder event for {item_id}")
-                    await send_single_reminder(item_id)
+                    await send_single_reminder(item_id, user_id)
                 elif etype == EventType.TODO_NOTIFICATION_DUE.value:
                     logger.info(f"Processing scheduled todo notification for {item_id}")
-                    await send_single_todo_notification(item_id)
+                    await send_single_todo_notification(item_id, user_id)
                     # Notify the supervisor to wake up immediately
                     await event_bus.publish(EventType.SUPERVISOR_WAKEUP)
             

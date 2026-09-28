@@ -59,8 +59,15 @@ class WakeWordService:
                 logger.warning(f"Local models directory not found: {local_models_dir}")
 
             if not model_paths:
-                logger.warning(f"No models found matching {self.models} in library or {local_models_dir}")
-                model_paths = []
+                logger.warning(
+                    "No models found matching %s in library or %s. "
+                    "Falling back to pretrained hey_jarvis (say 'Hey Jarvis').",
+                    self.models,
+                    local_models_dir,
+                )
+                model_paths = [
+                    p for p in all_paths if "hey_jarvis" in os.path.basename(p).lower()
+                ]
 
             # Initialize Model. Note: Some versions of openwakeword don't support inference_framework argument
             # or hardcode ONNX. We'll pass model_paths and hope for the best.

@@ -7,6 +7,7 @@ from rag.embedding import embed_texts
 from rag.image_handler import IMAGES_DIR
 from typing import Any
 from utils.logger import get_logger
+from utils.auth_utils import require_explicit_user_id
 
 logger = get_logger("rag.store")
 
@@ -26,6 +27,7 @@ def _get_client() -> Any:
 
 
 def _get_collection(user_id: str):
+    user_id = require_explicit_user_id(user_id)
     client = _get_client()
     name = f"rag_{user_id}"
     collection = client.get_or_create_collection(
@@ -51,6 +53,7 @@ async def store_document(
       - list[str] for plain text files
       - list[dict] for markdown: {text, heading, images}
     """
+    user_id = require_explicit_user_id(user_id)
     collection = _get_collection(user_id)
 
     if isinstance(chunks[0], dict):
@@ -112,14 +115,15 @@ async def store_document(
             logger.warning(
                 "Rolling back document metadata after ChromaDB failure. doc_id=%s", doc["id"],
             )
-            await db_delete_document(doc["id"])
+            await db_delete_document(doc["id"], user_id=user_id)
         raise
 
 
 async def delete_document(user_id: str, doc_id: str) -> bool:
     """Delete document from SQLite, ChromaDB, and image files."""
+    user_id = require_explicit_user_id(user_id)
     logger.debug("Deleting document. doc_id=%s user_id=%s", doc_id, user_id)
-    deleted = await db_delete_document(doc_id)
+    deleted = await db_delete_document(doc_id, user_id=user_id)
     if not deleted:
         logger.debug("Document not found in SQLite. doc_id=%s", doc_id)
         return False

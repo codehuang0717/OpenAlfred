@@ -2,24 +2,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 
-from core.database import get_active_user
 from services.weather import format_weather_text, get_weather_summary
-
-
-async def _get_active_user_id() -> str | None:
-    try:
-        active_user = await get_active_user()
-        if active_user:
-            return active_user["id"]
-    except Exception:
-        pass
-    return None
+from utils.auth_utils import require_runtime_user_id
 
 
 @tool
 async def get_weather(
+    runtime: ToolRuntime,
     location: Optional[str] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
@@ -37,7 +28,7 @@ async def get_weather(
     """
     try:
         summary = await get_weather_summary(
-            user_id=await _get_active_user_id(),
+            user_id=require_runtime_user_id(runtime),
             location=location,
             latitude=latitude,
             longitude=longitude,

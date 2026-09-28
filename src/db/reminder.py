@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from db.connection import get_db
 from utils.logger import get_logger
 from core.event_bus import event_bus, EventType
+from utils.auth_utils import require_explicit_user_id
 
 _logger = get_logger("db.reminder")
 
@@ -15,14 +16,16 @@ async def add_reminder(
     id: str,
     body: str,
     scheduled_at: str,
+    *,
+    user_id: str,
     title: Optional[str] = None,
     subtitle: Optional[str] = None,
     level: str = "active",
     sound: Optional[str] = None,
     delivery_method: str = "push",
     audio_path: str = "",
-    user_id: str = "default",
 ):
+    user_id = require_explicit_user_id(user_id)
     created_at = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:
         await db.execute(
@@ -49,7 +52,11 @@ async def add_reminder(
     # Publish creation event for UI
     await event_bus.publish(EventType.REMINDER_CREATED, {"id": id, "user_id": user_id})
     # Schedule precise trigger in Redis delayed queue
-    await event_bus.schedule(EventType.REMINDER_DUE, {"id": id}, scheduled_at)
+    await event_bus.schedule(
+        EventType.REMINDER_DUE,
+        {"id": id, "user_id": user_id},
+        scheduled_at,
+    )
 
 
 async def get_pending_reminders():
@@ -74,27 +81,30 @@ async def get_pending_reminders():
     return filtered
 
 
-async def mark_reminder_sent(id: str) -> bool:
+async def mark_reminder_sent(id: str, *, user_id: str) -> bool:
     """Mark a reminder as sent. Returns True if actually updated (idempotent)."""
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         cursor = await db.execute(
-            "UPDATE reminders SET sent = 1 WHERE id = ? AND sent = 0",
-            (id,),
+            "UPDATE reminders SET sent = 1 WHERE id = ? AND user_id = ? AND sent = 0",
+            (id, user_id),
         )
         await db.commit()
         updated = cursor.rowcount > 0
         if updated:
-            await event_bus.publish(EventType.REMINDER_SENT, {"id": id})
+            await event_bus.publish(EventType.REMINDER_SENT, {"id": id, "user_id": user_id})
         return updated
 
 
 async def update_reminder(
     id: str,
-    user_id: str = "default",
+    *,
+    user_id: str,
     scheduled_at: Optional[str] = None,
     title: Optional[str] = None,
     body: Optional[str] = None,
 ) -> bool:
+    user_id = require_explicit_user_id(user_id)
     updates = []
     params = []
 
@@ -126,11 +136,16 @@ async def update_reminder(
     await event_bus.publish(EventType.REMINDER_UPDATED, {"id": id, "user_id": user_id})
     if scheduled_at:
         # Re-schedule in delayed queue
-        await event_bus.schedule(EventType.REMINDER_DUE, {"id": id}, scheduled_at)
+        await event_bus.schedule(
+            EventType.REMINDER_DUE,
+            {"id": id, "user_id": user_id},
+            scheduled_at,
+        )
     return True
 
 
-async def get_all_reminders(user_id: str = "default"):
+async def get_all_reminders(user_id: str):
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         async with db.execute(
             "SELECT * FROM reminders WHERE user_id = ? ORDER BY scheduled_at DESC",
@@ -140,7 +155,8 @@ async def get_all_reminders(user_id: str = "default"):
             return [dict(row) for row in rows]
 
 
-async def delete_reminder(id: str, user_id: str = "default") -> bool:
+async def delete_reminder(id: str, *, user_id: str) -> bool:
+    user_id = require_explicit_user_id(user_id)
     async with get_db() as db:
         cursor = await db.execute("DELETE FROM reminders WHERE id = ? AND user_id = ?", (id, user_id))
         await db.commit()
@@ -155,12 +171,10 @@ async def delete_reminder(id: str, user_id: str = "default") -> bool:
     return True
 
 
-async def get_reminder_by_id(id: str, user_id: Optional[str] = None):
-    sql = "SELECT * FROM reminders WHERE id = ?"
-    params = [id]
-    if user_id is not None:
-        sql += " AND user_id = ?"
-        params.append(user_id)
+async def get_reminder_by_id(id: str, *, user_id: str):
+    user_id = require_explicit_user_id(user_id)
+    sql = "SELECT * FROM reminders WHERE id = ? AND user_id = ?"
+    params = [id, user_id]
 
     async with get_db() as db:
         async with db.execute(
