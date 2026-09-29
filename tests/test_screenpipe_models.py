@@ -37,6 +37,21 @@ class TestScreenpipeModels(unittest.TestCase):
         download.assert_called_once()
         screenpipe_models.verify_models(self.directory)
 
+    def test_failure_identifies_actual_directory_and_size(self):
+        (self.directory / "test.onnx").write_bytes(b"bad")
+        with self.assertRaises(RuntimeError) as caught:
+            screenpipe_models.verify_models(self.directory)
+        self.assertIn(str(self.directory.resolve()), str(caught.exception))
+        self.assertIn("大小 3", str(caught.exception))
+
+    def test_same_size_corruption_reports_actual_and_expected_hashes(self):
+        corrupt = b"x" * len(self.content)
+        (self.directory / "test.onnx").write_bytes(corrupt)
+        with self.assertRaises(RuntimeError) as caught:
+            screenpipe_models.verify_models(self.directory)
+        self.assertIn(hashlib.sha256(corrupt).hexdigest(), str(caught.exception))
+        self.assertIn(hashlib.sha256(self.content).hexdigest(), str(caught.exception))
+
     def test_invalid_download_preserves_existing_cache(self):
         target = self.directory / "test.onnx"
         target.write_bytes(b"old cache")

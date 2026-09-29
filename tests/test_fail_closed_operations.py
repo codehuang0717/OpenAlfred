@@ -111,7 +111,7 @@ class TestStrictConfigurationAndInput(unittest.IsolatedAsyncioTestCase):
 
     def test_invalid_utc_display_time_raises(self):
         with self.assertRaises(ValueError):
-            utc_to_local("not-a-date")
+            utc_to_local("not-a-date", "Asia/Shanghai")
 
 
 if __name__ == "__main__":

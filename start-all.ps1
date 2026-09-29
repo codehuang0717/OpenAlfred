@@ -8,6 +8,8 @@
     Ctrl+C 会停掉本脚本拉起的进程。
 #>
 
+param([switch]$CheckOnly, [switch]$SupervisorOnly, [switch]$RepairModels)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
@@ -31,11 +33,34 @@ if (-not (Test-Path $WebDir)) { $WebDir = Join-Path $AgentDir "web" }
 $VenvPython = Join-Path $AgentDir ".venv\Scripts\python.exe"
 $VenvLangGraph = Join-Path $AgentDir ".venv\Scripts\langgraph.exe"
 $LiveKitServer = Join-Path $AgentDir "bin\livekit-server.exe"
+. (Join-Path $AgentDir 'scripts\screen-supervisor.ps1')
 
 if (-not (Test-Path $VenvPython)) {
     Write-Host "ERROR: Python venv not found at $VenvPython" -ForegroundColor Red
     Write-Host "Run: uv sync" -ForegroundColor Red
     exit 1
+}
+$env:PYTHONPATH = $SrcDir
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$ort = Join-Path $AgentDir ".venv\Lib\site-packages\onnxruntime\capi"
+if (Test-Path $ort) { $env:PATH = "$ort;$env:PATH" }
+if ($RepairModels) {
+    Write-Service "Screenpipe" "Yellow" "Repairing model cache in this launch environment (verified downloads only)..."
+    & $VenvPython -c "from services.screenpipe_models import install_models, model_directory; print('Model directory:', model_directory(), flush=True); print('Installed:', install_models(), flush=True)"
+    if ($LASTEXITCODE -ne 0) { throw 'Screenpipe model repair failed; services were not started.' }
+}
+# Run in the same environment as the user's launcher, not a separate diagnostic shell.
+& $VenvPython -c "from services.screenpipe_models import verify_models, model_directory; verify_models(); print('Screenpipe models verified:', model_directory())"
+if ($LASTEXITCODE -ne 0) { throw 'Screenpipe model preflight failed. Run .\start-all.ps1 -RepairModels (or -RepairModels -CheckOnly to repair without starting).' }
+if ($CheckOnly) {
+    return
+}
+if ($SupervisorOnly) {
+    $supervisorProcess = Start-ScreenSupervisor -AgentRoot $AgentDir -PythonExe $VenvPython
+    try { Wait-Process -Id $supervisorProcess.Id }
+    finally { Stop-AlfredProcessTree -ProcessId $supervisorProcess.Id }
+    return
 }
 if (-not (Test-Path $VenvLangGraph)) {
     Write-Host "ERROR: LangGraph CLI not found at $VenvLangGraph. Run 'uv sync'." -ForegroundColor Red
@@ -98,12 +123,6 @@ function Test-HttpOk($url) {
         return $false
     }
 }
-
-$env:PYTHONPATH = $SrcDir
-$env:PYTHONUTF8 = "1"
-$env:PYTHONIOENCODING = "utf-8"
-$ort = Join-Path $AgentDir ".venv\Lib\site-packages\onnxruntime\capi"
-if (Test-Path $ort) { $env:PATH = "$ort;$env:PATH" }
 
 $processes = @()
 
@@ -245,11 +264,7 @@ $processes += Start-Process -FilePath $VenvPython `
 
 # 9. Supervisor — missing owner fails explicitly; recording defaults to off
 Write-Service "Alfred" "Cyan" "Starting Supervisor (waits for local account binding)..."
-$processes += Start-Process -FilePath $VenvPython `
-    -ArgumentList (Join-Path $SrcDir "supervisor.py") `
-    -WorkingDirectory $SrcDir -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput (Join-Path $Root "supervisor-stdout.log") `
-    -RedirectStandardError (Join-Path $Root "supervisor-stderr.log")
+$processes += Start-ScreenSupervisor -AgentRoot $AgentDir -PythonExe $VenvPython
 
 $serviceNames = @("Redis", "LiveKit-Server", "LangGraph", "FastAPI", "Worker", "Frontend", "LK-Cloud", "LK-Local", "Ear", "Supervisor")
 
@@ -326,10 +341,7 @@ finally {
         if ($null -eq $proc) { continue }
         if (-not $proc.HasExited) {
             try {
-                Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $proc.Id } | ForEach-Object {
-                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-                }
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                Stop-AlfredProcessTree -ProcessId $proc.Id
             } catch { }
         }
     }

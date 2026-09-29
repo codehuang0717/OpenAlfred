@@ -2,7 +2,8 @@ import httpx
 from utils.logger import get_logger
 from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from services.user_time import runtime_timezone
+from utils.time_utils import localize_to_utc
 from core.config import config
 from services.screen_monitor import require_screen_access
 from utils.auth_utils import require_runtime_user_id
@@ -82,41 +83,6 @@ async def _search_screenpipe(
     except Exception as e:
         logger.error(f"Error connecting to Screenpipe: {e}")
         return {"error": f"Error connecting to Screenpipe: {str(e)}"}
-
-
-def _local_to_utc(time_str: str) -> str:
-    """Convert a naive local-time string (per agent prompt convention) to
-    an ISO 8601 UTC string that the Screenpipe API expects.
-
-    Handles three input forms:
-    - Naive: ``2026-05-06T14:00:00`` → interpreted as config.TIMEZONE, output UTC
-    - With offset: ``2026-05-06T14:00:00+01:00`` → converted to UTC
-    - Already UTC: ``2026-05-06T14:00:00Z`` → returned as-is
-    """
-    if not time_str:
-        return time_str
-
-    tz = ZoneInfo(config.TIMEZONE)
-
-    # Already UTC
-    if time_str.endswith("Z"):
-        return time_str
-
-    # Has explicit offset
-    if "+" in time_str[10:] or time_str.count("-") > 1:
-        try:
-            dt = datetime.fromisoformat(time_str)
-            return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except ValueError:
-            pass
-
-    # Naive — interpret as local timezone
-    try:
-        dt_naive = datetime.fromisoformat(time_str)
-        dt_local = dt_naive.replace(tzinfo=tz)
-        return dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
-        return time_str
 
 
 def _format_content_item(item: dict) -> str:
@@ -227,14 +193,15 @@ async def view_screen(
             )
 
         elif mode == "time_range":
+            user_timezone = runtime_timezone(runtime)
             if not start_time and not end_time:
                 return "Error: time_range mode requires at least one of start_time or end_time."
             resp = await _search_screenpipe(
                 user_id=user_id,
                 q=query or None,
                 content_type=content_type,
-                start_time=_local_to_utc(start_time) if start_time else None,
-                end_time=_local_to_utc(end_time) if end_time else None,
+                start_time=localize_to_utc(start_time, user_timezone) if start_time else None,
+                end_time=localize_to_utc(end_time, user_timezone) if end_time else None,
                 app_name=app_name or None,
                 limit=limit,
             )
@@ -297,13 +264,15 @@ async def search_screen_time(
     """
     try:
         limit = min(limit, 100)
+        user_id = require_runtime_user_id(runtime)
+        user_timezone = runtime_timezone(runtime)
 
         resp = await _search_screenpipe(
-            user_id=require_runtime_user_id(runtime),
+            user_id=user_id,
             q=query or None,
             content_type=content_type,
-            start_time=_local_to_utc(start_time),
-            end_time=_local_to_utc(end_time) if end_time else None,
+            start_time=localize_to_utc(start_time, user_timezone),
+            end_time=localize_to_utc(end_time, user_timezone) if end_time else None,
             app_name=app_name or None,
             limit=limit,
         )

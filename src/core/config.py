@@ -88,7 +88,7 @@ class Config:
     CONTEXT_SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "mimo")
 
     # Timezone Settings
-    TIMEZONE = os.getenv("TIMEZONE", "Europe/London")
+    # User timezones are stored per account; server timezone is not user authority.
 
     # Browser Control Settings
     CHROME_CDP_URL = os.getenv("CHROME_CDP_URL", "http://localhost:9222")

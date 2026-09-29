@@ -9,6 +9,7 @@ from services.tts import save_tts_to_file
 
 # Import DB and utils functions
 from utils.time_utils import localize_to_utc
+from services.user_time import runtime_timezone
 from utils.auth_utils import require_runtime_user_id
 from core.database import (
     add_reminder as db_add_reminder,
@@ -82,7 +83,7 @@ async def add_reminder(
         
         # 1. 严格使用统一的本地化逻辑解析时间
         try:
-            final_time_utc = localize_to_utc(scheduled_at)
+            final_time_utc = localize_to_utc(scheduled_at, runtime_timezone(runtime))
             if not final_time_utc:
                 raise ValueError("Scheduled time cannot be empty")
         except Exception as e:
@@ -144,15 +145,16 @@ async def list_reminders(
         
         user_id = _get_user_id(runtime)
         reminders = await get_all_reminders(user_id=user_id)
+        user_timezone = runtime_timezone(runtime)
         
         # Apply date range filter
         if date_from or date_to:
             utc_from = None
             utc_to = None
             if date_from:
-                utc_from = parse_to_aware_utc(localize_to_utc(date_from))
+                utc_from = parse_to_aware_utc(localize_to_utc(date_from, user_timezone))
             if date_to:
-                utc_to = parse_to_aware_utc(localize_to_utc(date_to))
+                utc_to = parse_to_aware_utc(localize_to_utc(date_to, user_timezone))
             
             filtered = []
             for r in reminders:
@@ -190,7 +192,7 @@ async def list_reminders(
             res += f"📋 待触发提醒 ({len(upcoming)}条):\n"
             for i, r in enumerate(upcoming):
                 method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
-                local_time = utc_to_local(r.get('scheduled_at', ''))
+                local_time = utc_to_local(r.get('scheduled_at', ''), user_timezone)
                 marker = "👉 [下一个] " if i == 0 else ""
                 res += f"{marker}🔔 [{r['id'][:8]}] {local_time}: {r['body']} ({method})\n"
         else:
@@ -200,7 +202,7 @@ async def list_reminders(
             res += f"\n✅ 已完成提醒 ({len(past)}条):\n"
             for r in past:
                 method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
-                local_time = utc_to_local(r.get('scheduled_at', ''))
+                local_time = utc_to_local(r.get('scheduled_at', ''), user_timezone)
                 res += f"✅ [{r['id'][:8]}] {local_time}: {r['body']} ({method})\n"
         
         return res
@@ -229,7 +231,7 @@ async def update_reminder(
         # 如果修改时间，需要解析
         final_time_utc = None
         if scheduled_at:
-            final_time_utc = localize_to_utc(scheduled_at)
+            final_time_utc = localize_to_utc(scheduled_at, runtime_timezone(runtime))
 
         await db_update_reminder(
             id=id,

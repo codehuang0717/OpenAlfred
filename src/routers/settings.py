@@ -21,6 +21,19 @@ from services.weather import (
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
+
+class UserTimezoneRequest(BaseModel):
+    timezone: str
+
+
+@router.put("/settings/timezone")
+async def update_user_timezone(req: UserTimezoneRequest, user: dict = Depends(get_current_user)):
+    from services.user_time import save_user_timezone
+    try:
+        return {"timezone": await save_user_timezone(user["id"], req.timezone)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 AGENT_AVATAR_DIR = Path(__file__).parent.parent / "uploads" / "agents"
 
 

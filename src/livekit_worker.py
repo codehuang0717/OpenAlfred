@@ -227,9 +227,17 @@ async def entrypoint(ctx: JobContext):
 
     async def trigger_greeting():
         nonlocal greeting_played
+        if call_type == "inbound":
+            # SIP may dispatch the job while account lookup is still pending.
+            await inbound_resolved.wait()
         async with greeting_lock:
             if greeting_played:
                 return
+            if call_type == "inbound":
+                if not user_id:
+                    logger.error("[greeting] inbound caller could not be resolved")
+                    should_exit.set()
+                    return
             greeting_played = True
             logger.info(f"[greeting] call_type={call_type} session={unique_session_id}")
 
@@ -288,6 +296,9 @@ async def entrypoint(ctx: JobContext):
             should_exit.set()
             return
         await subscribe_to_audio(p)
+        # Publish greeting after ownership is known; waiting for track subscription
+        # can deadlock with a SIP call that is still ringing.
+        asyncio.create_task(trigger_greeting())
 
     @room.on("participant_attributes_changed")
     def on_attributes_changed(changed_attributes: dict, participant: rtc.RemoteParticipant):
@@ -368,7 +379,7 @@ async def entrypoint(ctx: JobContext):
             logger.info("[outbound] greeting_event set, playing greeting")
             await asyncio.sleep(0.3)
             await trigger_greeting()
-    else:
+    elif call_type == "local":
         asyncio.create_task(trigger_greeting())
 
     # ── Wait for call end ──────────────────────────────────────────

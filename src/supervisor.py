@@ -28,6 +28,7 @@ from core.database import (
 from services.tts import save_tts_to_file
 from tools.eye import get_recent_ocr_text
 from utils.time_utils import utc_to_local, parse_to_aware_utc
+from services.user_time import get_user_timezone
 from tools.call_user import dial_user
 from services.llm import get_model
 from logic.prompts import SUPERVISOR_PROMPT
@@ -72,6 +73,7 @@ class ProactiveSupervisor:
             raise RuntimeError("绑定的屏幕监控账号不存在")
             
         user_id = active_user['id']
+        user_timezone = await get_user_timezone(user_id)
         username = active_user['username']
         
         logger.info(f"Targeting active user: {username} ({user_id}). Preparing to fetch context...")
@@ -110,7 +112,7 @@ class ProactiveSupervisor:
 
         # Display Monitoring Context
         active_display = "\n".join([f"[blue]•[/blue] {t['title']}" for t in active_todos]) if active_todos else "[italic grey]None (Idle)[/italic grey]"
-        scheduled_display = "\n".join([f"[grey]• {t['title']} (Starts: {utc_to_local(t['scheduled_start_at'])})[/grey]" for t in scheduled_todos])
+        scheduled_display = "\n".join([f"[grey]• {t['title']} (Starts: {utc_to_local(t['scheduled_start_at'], user_timezone)})[/grey]" for t in scheduled_todos])
         
         display_text = f"[bold cyan]User:[/bold cyan] {username}\n[bold cyan]Monitoring Tasks:[/bold cyan]\n{active_display}"
         if scheduled_todos:
@@ -146,9 +148,9 @@ class ProactiveSupervisor:
         for t in active_todos:
             t_str = f"- {t['title']}: {t['description']}"
             if t.get('scheduled_start_at'):
-                t_str += f" (Scheduled Start: {utc_to_local(t['scheduled_start_at'])})"
+                t_str += f" (Scheduled Start: {utc_to_local(t['scheduled_start_at'], user_timezone)})"
             if t.get('expected_completion_at'):
-                t_str += f" (Deadline: {utc_to_local(t['expected_completion_at'])})"
+                t_str += f" (Deadline: {utc_to_local(t['expected_completion_at'], user_timezone)})"
             tasks_list.append(t_str)
             
         tasks_str = "\n".join(tasks_list)
@@ -233,6 +235,12 @@ class ProactiveSupervisor:
 
     async def start(self):
         await init_db()
+        from services.screenpipe_models import model_directory, verify_models
+        try:
+            logger.info("Supervisor startup: pid=%s models=%s", os.getpid(), model_directory())
+            await asyncio.to_thread(verify_models)
+        except (RuntimeError, OSError) as exc:
+            logger.warning("Screenpipe startup model check: %s", exc)
         while self.user_id is None:
             logger.info("本机尚未绑定账号，等待用户在主管设置中确认；不会采集屏幕")
             await asyncio.sleep(3)

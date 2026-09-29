@@ -42,11 +42,22 @@ def _valid_model(path: Path, size: int, sha256: str) -> bool:
 def verify_models(directory: Path | None = None) -> None:
     """Fail before capture if the legacy binary would load missing or corrupt models."""
     directory = directory or model_directory()
-    invalid = [name for name, (_, size, digest) in MODELS.items()
-               if not _valid_model(directory / name, size, digest)]
+    invalid = []
+    for name, (_, size, expected_hash) in MODELS.items():
+        path = directory / name
+        if not path.is_file():
+            invalid.append(f"{name} (文件不存在)")
+            continue
+        actual_size = path.stat().st_size
+        if actual_size != size:
+            invalid.append(f"{name} (大小 {actual_size}，预期 {size})")
+            continue
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            invalid.append(f"{name} (SHA-256 {actual_hash}，预期 {expected_hash})")
     if invalid:
         raise RuntimeError(
-            "Screenpipe 模型缺失或校验失败：" + ", ".join(invalid)
+            f"Screenpipe 模型缺失或校验失败，目录 {directory.resolve()}：" + ", ".join(invalid)
             + "；先运行 ./src/body/windows_system/eye/setup_eye.ps1 -InstallModels"
         )
 

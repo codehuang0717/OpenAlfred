@@ -5,6 +5,7 @@ from langchain.messages import ToolMessage
 from langgraph.types import Command
 from logic.schema import AgentState, TodoDict
 from utils.time_utils import localize_to_utc
+from services.user_time import runtime_timezone
 from utils.auth_utils import require_explicit_user_id, require_runtime_user_id
 from core.database import (
     get_all_todos,
@@ -51,15 +52,16 @@ async def get_todos(
     todos = await get_all_todos(user_id=user_id)
     
     # Apply date range filter if provided
+    user_timezone = runtime_timezone(runtime)
     if date_from or date_to:
         from utils.time_utils import localize_to_utc, parse_to_aware_utc
         
         utc_from = None
         utc_to = None
         if date_from:
-            utc_from = parse_to_aware_utc(localize_to_utc(date_from))
+            utc_from = parse_to_aware_utc(localize_to_utc(date_from, user_timezone))
         if date_to:
-            utc_to = parse_to_aware_utc(localize_to_utc(date_to))
+            utc_to = parse_to_aware_utc(localize_to_utc(date_to, user_timezone))
         
         filtered = []
         for t in todos:
@@ -86,9 +88,9 @@ async def get_todos(
     from utils.time_utils import utc_to_local
     for t in todos:
         if t.get('scheduled_start_at'):
-            t['scheduled_start_at'] = utc_to_local(t['scheduled_start_at'])
+            t['scheduled_start_at'] = utc_to_local(t['scheduled_start_at'], user_timezone)
         if t.get('expected_completion_at'):
-            t['expected_completion_at'] = utc_to_local(t['expected_completion_at'])
+            t['expected_completion_at'] = utc_to_local(t['expected_completion_at'], user_timezone)
     
     return todos
 
@@ -108,8 +110,9 @@ async def add_todo(
     id = str(uuid.uuid4())
     
     # Standardize time if provided
-    formatted_time = localize_to_utc(expected_completion_at) if expected_completion_at else None
-    formatted_start_time = localize_to_utc(scheduled_start_at) if scheduled_start_at else None
+    user_timezone = runtime_timezone(runtime) if expected_completion_at or scheduled_start_at else None
+    formatted_time = localize_to_utc(expected_completion_at, user_timezone) if expected_completion_at else None
+    formatted_start_time = localize_to_utc(scheduled_start_at, user_timezone) if scheduled_start_at else None
 
     await db_add_todo(
         id=id,
@@ -151,11 +154,12 @@ async def update_todo(
     user_id = await _get_user_id(runtime)
     
     # Standardize time if provided
+    user_timezone = runtime_timezone(runtime) if expected_completion_at or scheduled_start_at else None
     if expected_completion_at:
-        expected_completion_at = localize_to_utc(expected_completion_at)
+        expected_completion_at = localize_to_utc(expected_completion_at, user_timezone)
 
     if scheduled_start_at:
-        scheduled_start_at = localize_to_utc(scheduled_start_at)
+        scheduled_start_at = localize_to_utc(scheduled_start_at, user_timezone)
 
     await db_update_todo(
         id=id,

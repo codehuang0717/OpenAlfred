@@ -26,7 +26,7 @@ class TestTodoDates(unittest.TestCase):
             localize_to_utc("2026-09-23T24:00:00+08:00"),
             "2026-09-23T16:00:00Z",
         )
-        self.assertTrue(utc_to_local("2026-09-23T24:00:00+08:00"))
+        self.assertTrue(utc_to_local("2026-09-23T24:00:00+08:00", "Asia/Shanghai"))
 
     def test_non_midnight_24_hour_and_other_bad_dates_still_raise(self):
         for value in ("2026-09-23T24:01:00+08:00", "2026-09-23T24:00:01+08:00", "2026-09-23T25:00:00+08:00"):
@@ -36,7 +36,7 @@ class TestTodoDates(unittest.TestCase):
 
 class TestTodoDateIngress(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_end_of_day_row_can_be_read_by_agent(self):
-        runtime = SimpleNamespace(config={"configurable": {"langgraph_auth_user": {"identity": "user-a"}}})
+        runtime = SimpleNamespace(config={"configurable": {"langgraph_auth_user": {"identity": "user-a"}, "timezone": "Asia/Shanghai"}})
         row = {"id": "todo-a", "expected_completion_at": "2026-09-23T24:00:00+08:00", "scheduled_start_at": None}
         with patch.object(todo_tools, "get_all_todos", new=AsyncMock(return_value=[row])):
             result = await todo_tools.get_todos.coroutine(runtime=runtime)

@@ -29,6 +29,7 @@ class AgentState(BaseModel):
     conversation_summary: str = ""
     summarized_count: int = 0
     user_id: str = ""
+    user_timezone: Optional[str] = None
     system_instruction: str = ""
     runtime_context: str = ""
     extraction_counter: int = 0

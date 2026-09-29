@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import re
 from zoneinfo import ZoneInfo
-from core.config import config
+from services.user_time import validate_timezone
 
 _END_OF_DAY = re.compile(
     r"^(\d{4}-\d{2}-\d{2})[T ]24:00(?::00(?:[.,]0+)?)?(Z|[+-]\d{2}:\d{2})?$"
@@ -17,13 +17,13 @@ def _parse_iso_datetime(value: str) -> datetime:
         return datetime.fromisoformat(midnight) + timedelta(days=1)
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
-def localize_to_utc(time_str: str) -> str:
+def localize_to_utc(time_str: str, timezone_name: str | None = None) -> str:
     """
     Normalize any time string into a canonical UTC ISO-8601 string with 'Z' suffix.
 
     Handles three input formats:
       1. Naive (no tz info, e.g. '2026-04-24T15:00:00')
-         → Interpreted as the user's local timezone (config.TIMEZONE, e.g. Europe/London)
+         → Requires an explicit IANA timezone supplied by the caller.
          → Converted to UTC.
       2. 'Z'-suffixed (e.g. '2026-04-24T14:00:00Z')
          → Parsed as UTC, re-formatted for consistency.
@@ -44,18 +44,19 @@ def localize_to_utc(time_str: str) -> str:
     clean = time_str.strip()
 
     try:
-        if clean.endswith('Z'):
-            # Already marked as UTC — parse it properly
-            dt = _parse_iso_datetime(clean)
-        elif '+' in clean[10:] or (clean.count('-') > 2 and 'T' in clean):
-            # Contains an explicit offset like +01:00 or -05:00
-            dt = _parse_iso_datetime(clean)
-        else:
-            # Naive string — interpret as user's configured local timezone
-            normalized = clean.replace(' ', 'T') if (' ' in clean and 'T' not in clean) else clean
-            dt_naive = _parse_iso_datetime(normalized)
-            user_tz = ZoneInfo(config.TIMEZONE)
-            dt = dt_naive.replace(tzinfo=user_tz)
+        dt = _parse_iso_datetime(clean)
+        if dt.tzinfo is None:
+            zone = ZoneInfo(validate_timezone(timezone_name))
+            candidates = []
+            for fold in (0, 1):
+                candidate = dt.replace(tzinfo=zone, fold=fold)
+                if candidate.astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) == dt:
+                    candidates.append(candidate)
+            if not candidates:
+                raise ValueError("此本地时间因夏令时切换不存在，请选择其他时间")
+            if len({c.utcoffset() for c in candidates}) > 1:
+                raise ValueError("此本地时间因夏令时切换出现两次，请提供明确的 UTC 偏移量")
+            dt = candidates[0]
 
         # Convert to UTC and return canonical format
         utc_dt = dt.astimezone(timezone.utc)
@@ -93,18 +94,17 @@ def parse_to_aware_utc(time_str: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def utc_to_local(utc_str: str) -> str:
+def utc_to_local(utc_str: str, timezone_name: str) -> str:
     """Convert a DB timestamp to a human-readable local time string.
     
     Input:  '2026-05-26T08:00:00Z' or '2026-03-11T09:00:00' (naive)
-    Output: '2026-05-26 09:00 (BST)'  (if Europe/London in summer)
+    Output includes the IANA timezone and current UTC offset.
     
     Raises ValueError if parsing fails.
     """
     if not utc_str:
         return ""
     dt = parse_to_aware_utc(utc_str)
-    user_tz = ZoneInfo(config.TIMEZONE)
+    user_tz = ZoneInfo(validate_timezone(timezone_name))
     local_dt = dt.astimezone(user_tz)
-    tz_abbr = local_dt.strftime('%Z')  # e.g. 'BST', 'GMT'
-    return local_dt.strftime(f"%Y-%m-%d %H:%M ({tz_abbr})")
+    return f"{local_dt:%Y-%m-%d %H:%M} ({timezone_name}, UTC{local_dt:%z})"

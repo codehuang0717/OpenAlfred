@@ -309,8 +309,9 @@ class TestHistoryExcerpt(unittest.TestCase):
 
 class TestContextGraphIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_load_context_separates_fresh_time_from_stable_instructions(self):
-        cfg = {"configurable": {"langgraph_auth_user": {"identity": "a"}, "thread_id": "t"}}
+        cfg = {"configurable": {"langgraph_auth_user": {"identity": "a"}, "thread_id": "t", "timezone": "Asia/Shanghai"}}
         with patch.object(nodes.memory_manager, "build_injection_text", return_value="stable user facts"), \
+             patch.object(nodes, "save_user_timezone", new_callable=AsyncMock), \
              patch.object(nodes, "get_weather_summary", new_callable=AsyncMock, return_value={}), \
              patch.object(nodes, "format_weather_prompt_context", return_value="current weather"):
             result = await nodes.load_context_node(AgentState(), cfg)

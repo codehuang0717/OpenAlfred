@@ -1,5 +1,5 @@
 from utils.logger import get_logger
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import time
 
@@ -15,6 +15,7 @@ from logic.memory_manager import memory_manager
 from core.config import config as app_config
 from services.weather import format_weather_prompt_context, get_weather_summary
 from utils.auth_utils import require_thread_id, require_user_id
+from services.user_time import get_user_timezone, save_user_timezone, MissingTimezoneError
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
@@ -35,11 +36,6 @@ async def load_context_node(state: AgentState, config):
     """
     Node to inject dynamic context (time, summary, L1 memories) into the message list.
     """
-    # 1. Get current time
-    now_uk = datetime.now(ZoneInfo(app_config.TIMEZONE))
-    time_str = now_uk.strftime("%Y-%m-%d %H:%M:%S")
-    weekday = now_uk.strftime("%A")
-
     # Legacy append-only summaries are not injected. The budget planner loads
     # a versioned, owner-scoped rolling summary immediately before each model call.
     require_thread_id(config)
@@ -47,6 +43,15 @@ async def load_context_node(state: AgentState, config):
     # 3. Resolve user_id from authenticated request metadata. Fail closed when
     # ownership is missing or conflicting; cached graph state is not authority.
     user_id = require_user_id(config)
+    user_timezone = None
+    try:
+        user_timezone = await get_user_timezone(user_id, config)
+        await save_user_timezone(user_id, user_timezone)
+        now_local = datetime.now(ZoneInfo(user_timezone))
+        time_context = f"Current Time: {now_local.isoformat(timespec='seconds')} ({now_local:%A}). Timezone: {user_timezone}."
+        time_context += " 用户未指定其他时区时，今天/明天/下午均按此时区解释。工具可接收本地时间，由代码转换为 UTC；不要按服务器位置或历史记忆推算偏移。"
+    except MissingTimezoneError:
+        time_context = f"Current UTC: {datetime.now(timezone.utc).isoformat(timespec='seconds')}. 用户时区未知，不能猜测下午等本地时间，安排时间前请确认时区。"
     logger.debug(
         f"[load_context] user_id={user_id} state_uid={state.user_id}"
     )
@@ -60,13 +65,14 @@ async def load_context_node(state: AgentState, config):
     except Exception as e:
         logger.debug("[load_context] weather context skipped: %s", e)
 
-    context = f"[系统信息]\nCurrent Time: {time_str} ({weekday}). Timezone: {app_config.TIMEZONE}."
+    context = f"[系统信息]\n{time_context}"
     if weather_context:
         context += f"\n\n{weather_context}"
     return {
         "system_instruction": f"{AGENT_SYSTEM_PROMPT}\n\n{l1_memories}" if l1_memories else AGENT_SYSTEM_PROMPT,
         "runtime_context": context,
         "user_id": user_id,
+        "user_timezone": user_timezone,
     }
 
 async def agent_node(state: AgentState, config):
