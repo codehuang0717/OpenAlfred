@@ -139,7 +139,9 @@ async def write_code_source(
     ]
     last_error = ""
     for attempt in range(2):
-        response = await model.ainvoke(messages)
+        # The code writer runs inside a ToolNode. Do not inherit the graph's
+        # streaming callbacks: its large JSON source is not a chat response.
+        response = await model.ainvoke(messages, config={"callbacks": []})
         if on_stage is not None:
             await on_stage("validation")
         content = response.content

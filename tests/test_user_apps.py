@@ -337,7 +337,7 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
                     '{"html":"<p>Ready</p>","css":"","javascript":"const ready = true;"}',
                 ]
 
-            async def ainvoke(self, _messages):
+            async def ainvoke(self, _messages, config=None):
                 return SimpleNamespace(content=self.contents.pop(0))
 
         with patch.object(code_apps.config, "OPENAI_API_KEY", "test-key"), \
@@ -351,26 +351,32 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
 
     async def test_codegen_reports_model_and_validation_stages(self):
         class FakeModel:
-            async def ainvoke(self, _messages):
+            def __init__(self):
+                self.config = None
+
+            async def ainvoke(self, _messages, config=None):
+                self.config = config
                 return SimpleNamespace(content='{"html":"<main>OK</main>","css":"main{width:100%}","javascript":""}')
 
         stages = []
+        model = FakeModel()
 
         async def report(stage):
             stages.append(stage)
 
         await code_apps.write_code_source(
             code_apps.CodeAppRequest(title="时钟", prompt="创建一个简单的桌面时钟小程序"),
-            FakeModel(), on_stage=report,
+            model, on_stage=report,
         )
         self.assertEqual(stages, ["validation"])
+        self.assertEqual(model.config, {"callbacks": []})
 
     async def test_responsive_revision_prompt_includes_existing_source(self):
         class FakeModel:
             def __init__(self):
                 self.prompt = ""
 
-            async def ainvoke(self, messages):
+            async def ainvoke(self, messages, config=None):
                 self.prompt = messages[1].content
                 return SimpleNamespace(content='{"html":"<main>OK</main>","css":"main{width:100%}","javascript":""}')
 
