@@ -51,7 +51,9 @@ class Config:
     DEEPSEEK_PRO_MODEL = os.getenv("DEEPSEEK_PRO_MODEL", "deepseek-v4-pro")
     MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
     MIMO_CHAT_MODEL = os.getenv("MIMO_CHAT_MODEL", "mimo-v2.5-pro")
-    MIMO_VISION_MODEL = os.getenv("MIMO_VISION_MODEL", "mimo-v2.5")
+    MIMO_VISION_MODEL = os.getenv("MIMO_VISION_MODEL", "mimo-v2.6-flash")
+    MIMO_SUMMARY_MODEL = os.getenv("MIMO_SUMMARY_MODEL", "mimo-v2.6-flash")
+    MIMO_TITLE_MODEL = os.getenv("MIMO_TITLE_MODEL", "mimo-v2.6-flash")
     MEMORY_MODEL_SELECTION = os.getenv("MEMORY_MODEL_SELECTION", "mimo")
 
     # TTS Settings (Faster-Qwen3-TTS)
@@ -75,17 +77,21 @@ class Config:
     # Context Management
     MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
     MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "65536"))
-    CONTEXT_OUTPUT_RESERVE = int(os.getenv("CONTEXT_OUTPUT_RESERVE", "4096"))
+    # API cap AND input reserve: reasoning + visible answer, not answer alone.
+    CONTEXT_OUTPUT_RESERVE = int(os.getenv("CONTEXT_OUTPUT_RESERVE", "16384"))
     CONTEXT_SAFETY_MARGIN = int(os.getenv("CONTEXT_SAFETY_MARGIN", "2048"))
     CONTEXT_SUMMARY_TOKENS = int(os.getenv("CONTEXT_SUMMARY_TOKENS", "1600"))
     CONTEXT_SUMMARY_GENERATION_TOKENS = int(os.getenv("CONTEXT_SUMMARY_GENERATION_TOKENS", "4096"))
-    CONTEXT_SUMMARY_INPUT_TOKENS = int(os.getenv("CONTEXT_SUMMARY_INPUT_TOKENS", "12000"))
+    CONTEXT_SUMMARY_INPUT_TOKENS = int(os.getenv("CONTEXT_SUMMARY_INPUT_TOKENS", "32768"))
     CONTEXT_TOOL_RESULT_TOKENS = int(os.getenv("CONTEXT_TOOL_RESULT_TOKENS", "1200"))
     CONTEXT_TOOL_INLINE_TOKENS = int(os.getenv("CONTEXT_TOOL_INLINE_TOKENS", "8192"))
+    CONTEXT_OLD_TOOL_INLINE_TOKENS = int(os.getenv("CONTEXT_OLD_TOOL_INLINE_TOKENS", "2048"))
+    CONTEXT_KEEP_RECENT_TURNS = int(os.getenv("CONTEXT_KEEP_RECENT_TURNS", "2"))
     CONTEXT_COMPACT_TRIGGER = float(os.getenv("CONTEXT_COMPACT_TRIGGER", "0.90"))
     CONTEXT_COMPACT_TARGET = float(os.getenv("CONTEXT_COMPACT_TARGET", "0.65"))
     CONTEXT_IMAGE_TOKENS = int(os.getenv("CONTEXT_IMAGE_TOKENS", "8192"))
-    CONTEXT_SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "mimo")
+    CONTEXT_SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "mimo-summary")
+    CONTEXT_COMPACTION_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_COMPACTION_TIMEOUT_SECONDS", "300"))
 
     # Timezone Settings
     # User timezones are stored per account; server timezone is not user authority.

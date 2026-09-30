@@ -37,6 +37,7 @@ class AgentState(BaseModel):
     prepared_messages: list = []
     context_metrics: dict = {}
     context_error: str = ""
+    agent_outcome: dict = {}
 
 # ── Structured Output Schemas ──────────────────────────────────────────
 

@@ -221,9 +221,11 @@ async def entrypoint(ctx: JobContext):
     # ── State ──────────────────────────────────────────────────────
     answered_event = asyncio.Event()
     greeting_event = asyncio.Event()  # outbound: only set on callTag (real answer)
+    greeting_interrupt_event = asyncio.Event()
     greeting_played = False
     greeting_lock = asyncio.Lock()
     active_sessions: dict = {}
+    voice_tasks: set[asyncio.Task] = set()
 
     async def trigger_greeting():
         nonlocal greeting_played
@@ -252,7 +254,9 @@ async def entrypoint(ctx: JobContext):
 
                 try:
                     require_explicit_user_id(user_id)
-                    await play_greeting(room, current_speech, should_exit, call_type)
+                    await play_greeting(
+                        room, current_speech, greeting_interrupt_event,
+                    )
                 finally:
                     if session_obj and hasattr(session_obj, 'is_greeting_playing'):
                         session_obj.is_greeting_playing = False
@@ -264,7 +268,8 @@ async def entrypoint(ctx: JobContext):
         is_sip = participant.identity.startswith("sip_")
         resolved_user_id = require_explicit_user_id(user_id)
         return VoiceSession(room, should_exit, resolved_user_id,
-                           is_sip=is_sip, answered_event=answered_event)
+                           is_sip=is_sip, answered_event=answered_event,
+                           interrupt_event=greeting_interrupt_event)
 
     # ── Room event handlers ────────────────────────────────────────
 
@@ -334,10 +339,17 @@ async def entrypoint(ctx: JobContext):
 
             session = make_voice_session(participant)
             task = asyncio.create_task(session.run(track))
+            voice_tasks.add(task)
             active_sessions[participant.identity] = session
 
             def on_task_done(t):
+                voice_tasks.discard(t)
                 active_sessions.pop(participant.identity, None)
+                if not t.cancelled() and t.exception() is not None:
+                    logger.error("[voice-session] task failed", exc_info=(
+                        type(t.exception()), t.exception(), t.exception().__traceback__,
+                    ))
+                    should_exit.set()
             task.add_done_callback(on_task_done)
 
             if call_type in ("inbound", "local"):
@@ -386,22 +398,21 @@ async def entrypoint(ctx: JobContext):
     try:
         await should_exit.wait()
     finally:
+        # Stop and await run cancellation before removing the room or ownership.
+        pending_voice_tasks = list(voice_tasks)
+        for task in pending_voice_tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        await asyncio.gather(*pending_voice_tasks, return_exceptions=True)
         session_metadata_cache.pop(room.name, None)
 
-    # ── Hangup ─────────────────────────────────────────────────────
+    # Deleting the call room disconnects SIP callers and the agent together.
     try:
-        from livekit import api
-        lkapi = api.LiveKitAPI()
-        for p in room.remote_participants.values():
-            if p.identity.startswith("sip_"):
-                await lkapi.room.remove_participant(
-                    api.RoomParticipantIdentity(room=room.name, identity=p.identity))
-        await lkapi.room.delete_room(api.DeleteRoomRequest(room=room.name))
-        await lkapi.aclose()
+        await ctx.delete_room()
     except Exception as e:
         logger.error(f"[hangup] error: {e}")
-
-    await room.disconnect()
+    finally:
+        await room.disconnect()
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from tools.weather import weather_tools
 from tools.user_apps import user_app_tools
 from tools.context_history import context_tools
 from tools.image_generation import image_tools
+from tools.end_call import end_call_tools
 
 import logging
 
@@ -27,7 +28,7 @@ _BUILTIN_TOOLS: list = (
     screenshot_tools +
     rag_tools +
     weather_tools +
-    user_app_tools + context_tools + image_tools
+    user_app_tools + context_tools + image_tools + end_call_tools
 )
 
 _import_logger.debug(

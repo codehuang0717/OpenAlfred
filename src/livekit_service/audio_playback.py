@@ -43,7 +43,7 @@ async def _push_int16_frames(source: rtc.AudioSource, pcm: bytes, interrupt_even
         pushed += len(chunk)
     return pushed
 
-async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, interrupt_event: asyncio.Event, start_event: asyncio.Event = None):
+async def play_tts(room: rtc.Room, text: str, interrupt_event: asyncio.Event, start_event: asyncio.Event = None) -> bool:
     """Generate and play TTS audio in the LiveKit room.
 
     If start_event is provided and not yet set, audio is prefetched in the
@@ -60,6 +60,7 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
     source = None
     track = None
     publication = None
+    played_to_end = False
 
     try:
         latency_tracker.start("tts_first_chunk")
@@ -70,7 +71,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
         jitter_threshold_bytes -= jitter_threshold_bytes % 2
         playback_started = False
         total_samples_pushed = 0
-        start_time = 0
         t_last_recv = t0
         underrun_warns = 0
 
@@ -134,7 +134,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
                 playback_started = True
-                start_time = t_play
 
             if playback_started and source is not None:
                 available = len(jitter_buffer_bytes) - (len(jitter_buffer_bytes) % 2)
@@ -155,7 +154,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 latency_tracker.start("tts_playback")
                 latency_tracker.start("tts_audio_stream")
                 playback_started = True
-                start_time = time.time()
 
             prefetch_np = np.frombuffer(prefetch_buffer, dtype=np.int16)
             for i in range(0, len(prefetch_np), 480):
@@ -171,7 +169,6 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
         if jitter_buffer_bytes and not interrupt_event.is_set():
             if not playback_started:
                 playback_started = True
-                start_time = time.time()
             audio_np = np.frombuffer(jitter_buffer_bytes, dtype=np.int16)
             for i in range(0, len(audio_np), 480):
                 if interrupt_event.is_set():
@@ -188,31 +185,32 @@ async def play_tts(room: rtc.Room, text: str, should_exit_event: asyncio.Event, 
                 f"underrun_warns={underrun_warns} | dt={time.time() - t0:.3f}s"
             )
 
-        # Wait for audio to drain
+        # The source queue, not a guessed duration, determines when local playout ends.
         if total_samples_pushed > 0 and not interrupt_event.is_set():
-            total_duration = total_samples_pushed / 24000
-            elapsed = time.time() - start_time
-            remaining = total_duration - elapsed
-            if remaining > 0:
-                await asyncio.sleep(remaining + 0.3)
+            await source.wait_for_playout()
+            if not interrupt_event.is_set():
+                await asyncio.sleep(0.3)  # Leave a small margin for SIP packet playout.
+                played_to_end = not interrupt_event.is_set()
 
         if playback_started:
             latency_tracker.end("tts_playback")
     except asyncio.CancelledError:
         logger.info(f"[TIMING][TTS] CANCELLED | dt={time.time() - t0:.3f}s")
     finally:
+        if source is not None and not played_to_end:
+            try:
+                source.clear_queue()
+            except Exception as exc:
+                logger.warning(f"[VoiceInterrupt] TTS queue clear failed: {exc}")
         if publication:
             logger.info(f"[TIMING][TTS] DONE | total_dt={time.time() - t0:.3f}s")
             await room.local_participant.unpublish_track(publication.sid)
-        if "[TERMINATE]" in text:
-            logger.info("Termination signal detected in Agent response. Hanging up...")
-            should_exit_event.set()
+    return played_to_end
 
 async def play_greeting(
     room: rtc.Room,
     initial_speech: str = "",
-    should_exit_event: asyncio.Event = None,
-    call_type: str = "inbound",
+    interrupt_event: asyncio.Event = None,
 ):
     """Play the greeting. Prioritize pre-rendered wav if available, otherwise TTS."""
     
@@ -276,8 +274,7 @@ async def play_greeting(
     # 3. Fallback: play_tts
     if initial_speech:
         logger.info(f"Playing initial speech via TTS: {initial_speech}")
-        dummy_interrupt = asyncio.Event()
-        await play_tts(room, initial_speech, should_exit_event, dummy_interrupt)
+        await play_tts(room, initial_speech, interrupt_event or asyncio.Event())
         return
 
     # 4. Final fallback: default greeting.wav
@@ -343,6 +340,7 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
             return
 
     t0 = time.time()
+    cancelled = False
     logger.info(f"[TIMING][Transition] START | tool={tool_name} | file={os.path.basename(wav_path)} | t={t0:.3f}")
 
     source = rtc.AudioSource(24000, 1)
@@ -392,11 +390,17 @@ async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, 
         logger.info(f"[TIMING][Transition] DONE | total_dt={time.time() - t0:.3f}s")
 
     except asyncio.CancelledError:
+        cancelled = True
         logger.info(f"[TIMING][Transition] CANCELLED | dt={time.time() - t0:.3f}s")
         pass
     except Exception as e:
         logger.error(f"[Transition] Error playing transition audio: {e}")
     finally:
+        if interrupt_event.is_set() or cancelled:
+            try:
+                source.clear_queue()
+            except Exception as exc:
+                logger.warning(f"[VoiceInterrupt] transition queue clear failed: {exc}")
         await room.local_participant.unpublish_track(publication.sid)
 
 

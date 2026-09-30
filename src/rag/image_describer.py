@@ -1,9 +1,8 @@
 """
-Image describer — uses mimo-v2.6 multimodal (not Pro) to generate text
+Image describer — uses the configured MiMo vision model to generate text
 descriptions of images, with file-hash-based cache to avoid re-describing.
 
-Pro (`mimo-v2.6-pro`) has no vision. Official image model id: `mimo-v2.6`
-https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding
+The vision model is configured independently from the chat and summary models.
 """
 
 import os
@@ -77,7 +76,7 @@ def _write_cache(file_hash: str, description: str):
 
 
 def describe_image(image_path: str, force: bool = False) -> str:
-    """Generate a Chinese text description for an image using mimo-v2.6.
+    """Generate a Chinese text description using MIMO_VISION_MODEL.
 
     Uses file-content hash for cache. Returns empty string on failure.
     """

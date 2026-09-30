@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import time
@@ -68,6 +69,9 @@ class ContextManager:
         tool_inline_tokens: int = config.CONTEXT_TOOL_INLINE_TOKENS,
         compact_trigger: float = config.CONTEXT_COMPACT_TRIGGER,
         compact_target: float = config.CONTEXT_COMPACT_TARGET,
+        compaction_timeout: float = config.CONTEXT_COMPACTION_TIMEOUT_SECONDS,
+        old_tool_inline_tokens: int = config.CONTEXT_OLD_TOOL_INLINE_TOKENS,
+        keep_recent_turns: int = config.CONTEXT_KEEP_RECENT_TURNS,
     ):
         self.max_messages = max_messages
         self.max_context_tokens = max_context_tokens
@@ -80,6 +84,9 @@ class ContextManager:
         self.tool_inline_tokens = tool_inline_tokens
         self.compact_trigger = compact_trigger
         self.compact_target = compact_target
+        self.compaction_timeout = compaction_timeout
+        self.old_tool_inline_tokens = old_tool_inline_tokens
+        self.keep_recent_turns = keep_recent_turns
         # Only digests and counts are cached, never user text or model outputs.
         self._token_counts = OrderedDict()
         self.encoding = tiktoken.get_encoding("cl100k_base")
@@ -91,6 +98,10 @@ class ContextManager:
             raise ValueError("Summary generation allowance must cover final summary limit")
         if not 0 < compact_target < compact_trigger <= 1 or tool_inline_tokens < tool_result_tokens:
             raise ValueError("Invalid compaction thresholds")
+        if compaction_timeout <= 0:
+            raise ValueError("Compaction timeout must be positive")
+        if not tool_result_tokens <= old_tool_inline_tokens <= tool_inline_tokens or keep_recent_turns < 1:
+            raise ValueError("Invalid old-tool budget or protected turn count")
 
     def tokens(self, text: str) -> int:
         key = hashlib.sha256(text.encode()).digest()
@@ -105,6 +116,11 @@ class ContextManager:
 
     def count_payload(self, message) -> tuple[dict, int]:
         value = payload(message)
+        if isinstance(message, AIMessage) and message.tool_calls:
+            reasoning = message.additional_kwargs.get("reasoning_content")
+            if isinstance(reasoning, str):
+                # Count the wire field without exposing it via ctx: excerpts.
+                value["reasoning_content"] = reasoning
         image_cost = 0
         if isinstance(message.content, list):
             blocks = []
@@ -162,11 +178,25 @@ class ContextManager:
             result.append((start, index))
         return result
 
-    def compact_tools(self, messages: list) -> tuple[list, int]:
+    @staticmethod
+    def turns(messages: list) -> list[tuple[int, int]]:
+        """A user request and every ensuing tool loop/reply form a whole turn.
+
+        Call units() first to validate tool pairing; user messages cannot occur
+        inside one of its complete tool groups. A pre-user prefix is its own turn.
+        """
+        starts = [i for i, message in enumerate(messages) if isinstance(message, HumanMessage)]
+        if messages and (not starts or starts[0] != 0):
+            starts.insert(0, 0)
+        return [(start, starts[i + 1] if i + 1 < len(starts) else len(messages))
+                for i, start in enumerate(starts)]
+
+    def compact_tools(self, messages: list, protected_start: int = 0) -> tuple[list, int]:
         projected = []
         compacted = 0
         for index, message in enumerate(messages):
-            if isinstance(message, ToolMessage) and self.message_tokens([message]) > self.tool_inline_tokens:
+            threshold = self.old_tool_inline_tokens if index < protected_start else self.tool_inline_tokens
+            if isinstance(message, ToolMessage) and self.message_tokens([message]) > threshold:
                 text = serialize(payload(message))
                 encoded = self.encoding.encode(text, disallowed_special=())
                 excerpt = {
@@ -212,7 +242,7 @@ class ContextManager:
                     prompt, config={"callbacks": []},
                     **output_limit_kwargs(config.CONTEXT_SUMMARY_MODEL, self.summary_generation_tokens),
                 ),
-                timeout=60,
+                timeout=self.compaction_timeout,
             )
         except LengthFinishReasonError as exc:
             raise ContextBudgetError(
@@ -220,7 +250,9 @@ class ContextManager:
                 "未重试或保存残缺摘要，请检查 CONTEXT_SUMMARY_GENERATION_TOKENS"
             ) from exc
         except TimeoutError as exc:
-            raise ContextBudgetError("摘要生成超过 60 秒，未重试或保存摘要") from exc
+            raise ContextBudgetError(
+                f"摘要等待超过配置时限（{self.compaction_timeout:g} 秒），未重试或保存残缺摘要"
+            ) from exc
         if not isinstance(result, RollingSummary):
             raise ContextBudgetError("摘要模型未返回合法结构化结果")
         encoded = result.model_dump_json()
@@ -230,7 +262,18 @@ class ContextManager:
             raise ContextBudgetError("摘要模型返回空摘要，拒绝丢弃历史")
         return encoded
 
-    def split_record(self, value: dict, available: int) -> list[dict]:
+    def summary_evidence_budget(self) -> int:
+        # The summary JSON is itself a string inside the serialized human message.
+        # Reserve for its escaping too, not just the stored summary's token count.
+        return (self.summary_input_tokens - self.summary_tokens * 2 - self.summary_generation_tokens
+                - self.safety_margin - self.tokens(SUMMARY_INSTRUCTION)
+                - self.tokens(serialize(RollingSummary.model_json_schema())) - 512)
+
+    def summary_evidence_tokens(self, records: list[dict]) -> int:
+        """Use the same nested message encoding as the final request check."""
+        return self.message_tokens([HumanMessage(content=serialize({"new_evidence": records}))])
+
+    def split_record(self, value: dict, available: int, *, nested: bool = False) -> list[dict]:
         text = serialize(value)
         fragments = []
         offset = 0
@@ -242,12 +285,15 @@ class ContextManager:
                 # expand substantially when nested in a summary request).
                 candidate = {"ref": value["ref"], "part": len(fragments) + 1,
                              "parts": len(text), "fragment": text[offset:offset + mid]}
-                if self.tokens(serialize(candidate)) <= available:
+                cost = self.summary_evidence_tokens([candidate]) if nested else self.tokens(serialize(candidate))
+                if cost <= available:
                     low = mid
                 else:
                     high = mid - 1
             fragment = {"ref": value["ref"], "part": len(fragments) + 1, "fragment": text[offset:offset + low]}
-            if self.tokens(serialize({**fragment, "parts": len(text)})) > available:
+            candidate = {**fragment, "parts": len(text)}
+            cost = self.summary_evidence_tokens([candidate]) if nested else self.tokens(serialize(candidate))
+            if cost > available:
                 raise ContextBudgetError("摘要证据分片预算不足")
             fragments.append(fragment)
             offset += low
@@ -255,14 +301,38 @@ class ContextManager:
             fragment["parts"] = len(fragments)
         return fragments
 
-    async def prepare(self, messages: list, system: str, tools: list, user_id: str, thread_id: str, runtime_context: str = "") -> PreparedContext:
+    def summary_batches(self, records: list[dict], available: int) -> list[list[dict]]:
+        """Keep fitting records intact; only split a record that exceeds a batch.
+
+        Passing dictionaries directly avoids quoting an already serialized JSON
+        record again, and keeps identifiers/status fields visible to the model.
+        """
+        batches, batch = [], []
+        for record in records:
+            pieces = ([record] if self.summary_evidence_tokens([record]) <= available
+                      else self.split_record(record, available - 128, nested=True))
+            for piece in pieces:
+                if batch and self.summary_evidence_tokens(batch + [piece]) > available:
+                    batches.append(batch)
+                    batch = []
+                batch.append(piece)
+                if self.summary_evidence_tokens(batch) > available:
+                    raise ContextBudgetError("摘要证据分片仍超预算，拒绝发送")
+        if batch:
+            batches.append(batch)
+        return batches
+
+    async def prepare(self, messages: list, system: str, tools: list, user_id: str, thread_id: str,
+                      runtime_context: str = "", on_progress: Callable[[dict], None] | None = None) -> PreparedContext:
         started = time.monotonic()
-        units = self.units(messages)
+        self.units(messages)
         users = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
         if not users:
             raise ContextBudgetError("上下文缺少当前用户请求")
         latest_user = users[-1]
-        projected, compacted = self.compact_tools(messages)
+        turns = self.turns(messages)
+        protected_start = turns[max(0, len(turns) - self.keep_recent_turns)][0]
+        projected, compacted = self.compact_tools(messages, protected_start)
         schema_tokens = self.tool_tokens(tools)
         budget = self.max_context_tokens - self.output_reserve - self.safety_margin
         fixed = [SystemMessage(content=system)]
@@ -271,27 +341,58 @@ class ContextManager:
         fixed_tokens = self.message_tokens(fixed) + schema_tokens
         if fixed_tokens >= budget:
             raise ContextBudgetError("系统提示与工具定义已超过上下文预算，请调整 MAX_CONTEXT_TOKENS 或减少工具")
-        minimum = self.render(system, "", projected, units[max(0, len(units) - 2)][0], latest_user, runtime_context)
+        minimum = self.render(system, "", projected, protected_start, latest_user, runtime_context)
         if self.message_tokens(minimum) + schema_tokens > budget:
-            raise ContextBudgetError("当前用户请求或最近完整工具组过大，请拆分输入或提高预算；未调用摘要模型")
+            raise ContextBudgetError("当前用户请求或最近完整对话过大，请拆分输入、提高预算或显式调整 CONTEXT_KEEP_RECENT_TURNS；未调用摘要模型")
         record = await load_compaction(user_id, thread_id)
         covered, summary, revision = 0, "", 0
         reset = False
         if record:
             revision = record["revision"]
             covered, summary = record["covered_count"], record["summary"]
-            boundaries = {0, *(end for _, end in units)}
-            if covered not in boundaries or record["covered_hash"] != history_hash(messages, covered):
-                logger.warning("context.compaction history_changed: rebuild from canonical history")
+            boundaries = {0, *(start for start, _ in turns)}
+            if covered not in boundaries or covered > protected_start or record["covered_hash"] != history_hash(messages, covered):
+                logger.warning("context.compaction history_or_turn_boundary_changed: rebuild from canonical history")
                 covered, summary, reset = 0, "", True
             elif summary:
                 RollingSummary.model_validate_json(summary)
         initial_count = covered
         before = self.message_tokens(self.render(system, summary, messages, covered, latest_user, runtime_context)) + schema_tokens
         merges = 0
-        # Never compact the newest two units; the latest user is pinned independently.
-        eligible = [(start, end) for start, end in units[:-2] if start >= covered]
-        available = self.summary_input_tokens - self.summary_tokens - self.summary_generation_tokens - self.safety_margin - self.tokens(SUMMARY_INSTRUCTION) - self.tokens(serialize(RollingSummary.model_json_schema())) - 512
+        compaction_started = None
+
+        async def merge_batch(previous: str, batch: list[dict]) -> str:
+            nonlocal compaction_started
+            if compaction_started is None:
+                compaction_started = time.monotonic()
+            elapsed = time.monotonic() - compaction_started
+            remaining = self.compaction_timeout - elapsed
+            if remaining <= 0:
+                raise ContextBudgetError("上下文压缩已超过总等待时限，旧摘要保持不变")
+            progress = {"type": "context_compaction", "status": "running", "batch": merges + 1}
+            if on_progress:
+                on_progress(progress)
+            batch_started = time.monotonic()
+            logger.info("context.summary_batch started: %s", serialize({
+                **progress, "model": config.CONTEXT_SUMMARY_MODEL,
+                "evidence_tokens": self.tokens(serialize(batch)),
+                "request_evidence_tokens": self.summary_evidence_tokens(batch),
+                "remaining_seconds": round(remaining, 2),
+            }))
+            try:
+                result = await asyncio.wait_for(self.merge_summary(previous, batch), timeout=remaining)
+            except TimeoutError as exc:
+                raise ContextBudgetError(
+                    f"上下文压缩总等待超过 {self.compaction_timeout:g} 秒，旧摘要保持不变"
+                ) from exc
+            finally:
+                logger.info("context.summary_batch finished: %s", serialize({
+                    "batch": merges + 1, "elapsed_ms": round((time.monotonic() - batch_started) * 1000),
+                }))
+            return result
+        # Only whole older turns are eligible; all recent tool loops remain paired.
+        eligible = [(start, end) for start, end in turns if covered <= start < protected_start]
+        available = self.summary_evidence_budget()
         if available < 256:
             raise ContextBudgetError("摘要输入预算不足")
         compacting = False
@@ -317,29 +418,24 @@ class ContextManager:
                 removed_tokens += self.message_tokens(projected[part_start:end])
                 if removed_tokens >= target_tokens:
                     break
-            fragments = []
+            records = []
             for index in range(start, end):
                 value, _ = self.count_payload(projected[index])
+                # Wire-only reasoning is unnecessary evidence for rolling summaries.
+                value.pop("reasoning_content", None)
                 value["ref"] = reference(index, messages[index])
-                fragments.extend(self.split_record(value, available - 128))
-            batch = []
-            for fragment in fragments:
-                if batch and self.tokens(serialize(batch + [fragment])) > available:
-                    if merges >= 64:
-                        raise ContextBudgetError("本轮压缩工作量超过上限，未提交摘要；请缩短历史")
-                    summary = await self.merge_summary(summary, batch)
-                    merges += 1
-                    batch = []
-                batch.append(fragment)
-            if batch:
+                records.append(value)
+            for batch in self.summary_batches(records, available):
                 if merges >= 64:
                     raise ContextBudgetError("本轮压缩工作量超过上限，未提交摘要；请缩短历史")
-                summary = await self.merge_summary(summary, batch)
+                summary = await merge_batch(summary, batch)
                 merges += 1
             covered = end
         # Only commit after all projection and budget checks succeeded.
         if covered != initial_count or reset:
             await save_compaction(user_id, thread_id, summary, covered, history_hash(messages, covered), revision)
+        if merges and on_progress:
+            on_progress({"type": "context_compaction", "status": "completed", "batches": merges})
         metrics = {
             "event": "context.prepared", "input_tokens_before": before, "input_tokens_after": after,
             "tool_schema_tokens": schema_tokens, "fixed_tokens": fixed_tokens,
@@ -347,6 +443,9 @@ class ContextManager:
             "budget": self.max_context_tokens, "covered_count": covered,
             "trigger_tokens": int(budget * self.compact_trigger), "target_tokens": int(budget * self.compact_target),
             "tool_results_compacted": compacted, "summary_merges": merges,
+            "protected_turns": min(len(turns), self.keep_recent_turns), "protected_start": protected_start,
+            "protected_tokens": self.message_tokens(projected[protected_start:]),
+            "summary_request_budget": self.summary_input_tokens, "summary_evidence_budget": available,
             "summary_final_limit": self.summary_tokens, "summary_generation_limit": self.summary_generation_tokens,
             "history_rebuilt": reset, "elapsed_ms": round((time.monotonic() - started) * 1000),
             "token_estimator": "cl100k_base; images=configured reserve",

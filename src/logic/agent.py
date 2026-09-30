@@ -12,21 +12,22 @@ from langgraph.prebuilt.tool_node import ToolInvocationError
 from utils.auth_utils import MissingThreadContextError, MissingUserContextError, UserContextMismatchError
 
 from logic.schema import AgentState
-from logic.nodes import load_context_node, prepare_context_node, agent_node, extract_knowledge_node
+from logic.nodes import load_context_node, prepare_context_node, agent_node, extract_knowledge_node, fail_run_node
 
 logger = logging.getLogger("chat-agent")
 
 # ─── Graph Logic ──────────────────────────────────────────────────────────
 
-def should_continue(state: AgentState) -> Literal["tools", "extract_knowledge", "end"]:
-    """Route to tools if the last message has tool calls, otherwise extract_knowledge."""
-    if state.context_error:
-        return "end"
-    messages = state.messages
-    last_message = messages[-1]
-    if last_message.tool_calls:
+def should_continue(state: AgentState) -> Literal["tools", "extract_knowledge", "fail_run"]:
+    """Only validated model outcomes can dispatch tools or complete a turn."""
+    status = state.agent_outcome.get("status")
+    if status == "failed":
+        return "fail_run"
+    if status == "tools":
         return "tools"
-    return "extract_knowledge"
+    if status == "completed":
+        return "extract_knowledge"
+    raise RuntimeError("agent_node did not produce a validated outcome")
 
 # ─── Graph Construction ───────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ workflow.add_node("prepare_context", prepare_context_node)
 workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tool_node)
 workflow.add_node("extract_knowledge", extract_knowledge_node)
+workflow.add_node("fail_run", fail_run_node)
 
 workflow.set_entry_point("load_context")
 workflow.add_edge("load_context", "prepare_context")
@@ -78,7 +80,7 @@ workflow.add_conditional_edges(
     {
         "tools": "tools",
         "extract_knowledge": "extract_knowledge",
-        "end": END,
+        "fail_run": "fail_run",
     }
 )
 

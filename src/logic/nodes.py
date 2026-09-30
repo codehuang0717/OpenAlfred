@@ -4,12 +4,14 @@ from zoneinfo import ZoneInfo
 import time
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langgraph.types import StreamWriter
 
 from logic.schema import AgentState
 from services.llm import get_model, get_bound_model, output_limit_kwargs
 from logic.prompts import AGENT_SYSTEM_PROMPT, KNOWLEDGE_EXTRACTION_PROMPT
 from logic.context_manager import ContextManager
 from logic.context_metrics import model_usage_metrics
+from logic.agent_outcome import AgentRunError, classify_response, failure_text, visible_text
 from logic.context_payload import serialize
 from logic.memory_manager import memory_manager
 from core.config import config as app_config
@@ -73,16 +75,30 @@ async def load_context_node(state: AgentState, config):
         "runtime_context": context,
         "user_id": user_id,
         "user_timezone": user_timezone,
+        "agent_outcome": {"status": "running"},
     }
 
-async def agent_node(state: AgentState, config):
+async def agent_node(state: AgentState, config, writer: StreamWriter):
     """
     The main reasoning node.
     Binds all tools by default. Excludes browser tasks for voice calls.
     """
     from tools import ALL_TOOLS
+    def failed(code: str, text: str, response=None, usage=None) -> dict:
+        outcome = {"status": "failed", "code": code}
+        if response is not None:
+            outcome["finish_reason"] = response.response_metadata.get("finish_reason")
+        # Strip calls from rejected generations: no orphan calls, no tool execution.
+        message = AIMessage(
+            id=response.id if response is not None else None,
+            content=text,
+            additional_kwargs={"agent_outcome": outcome, "agent_failure": text},
+        )
+        return {"messages": [message], "agent_outcome": outcome,
+                "context_metrics": {**state.context_metrics, **({"model_usage": usage} if usage else {})}}
+
     if state.context_error:
-        return {"messages": [AIMessage(content=f"上下文准备失败：{state.context_error}。已停止后续主模型调用，请检查配置或拆分输入后重试。") ]}
+        return failed("context_preparation_failed", f"上下文准备失败：{state.context_error}。已停止后续主模型调用，请检查配置或拆分输入后重试。")
     
     # model_selection priority: config.configurable > state > default
     conf = config.get("configurable", {}) if isinstance(config, dict) else {}
@@ -128,7 +144,6 @@ async def agent_node(state: AgentState, config):
     
     # Bind tools to the model (cached by model + tool set)
     tool_names = frozenset(t.name for t in selected_tools)
-    llm = get_bound_model(model_selection, tool_names, ALL_TOOLS)
     
     if not state.prepared_messages:
         raise RuntimeError("Budgeted context preparation must run before agent_node")
@@ -137,24 +152,55 @@ async def agent_node(state: AgentState, config):
     # Run the model
     started = time.monotonic()
     try:
+        llm = get_bound_model(model_selection, tool_names, ALL_TOOLS)
         response = await llm.ainvoke(prompt_messages, config, **output_limit_kwargs(model_selection, ctx_manager.output_reserve))
     except Exception as e:
         friendly = _map_llm_error(e)
         logger.error(f"[AgentNode] LLM error (model={model_selection}): {friendly}")
-        error_msg = AIMessage(content=f"❌ {friendly}")
-        return {"messages": [error_msg]}
+        return failed("model_request_failed", f"❌ 模型调用失败：{friendly}。未自动重试或切换模型。")
     usage = model_usage_metrics(response, model_selection, round((time.monotonic() - started) * 1000))
+    outcome = classify_response(response, set(tool_names))
+    usage["outcome"] = outcome.as_dict()
+    usage["generation_limit"] = ctx_manager.output_reserve
     logger.info("context usage: %s", serialize(usage))
-    return {"messages": [response], "context_metrics": {**state.context_metrics, "model_usage": usage}}
+    if outcome.status == "failed":
+        partial = visible_text(response).strip()
+        text = (partial + "\n\n" if partial else "") + "❌ " + failure_text(outcome.code)
+        return failed(outcome.code, text, response, usage)
+    response.additional_kwargs["agent_outcome"] = outcome.as_dict()
+    if outcome.status == "completed" and not response.content:
+        response = response.model_copy(update={"content": visible_text(response)})
+    if response.tool_calls:
+        writer({
+            "type": "tool_calls",
+            "tools": [
+                {"id": call.get("id") or f"idx:{index}", "name": call["name"]}
+                for index, call in enumerate(response.tool_calls)
+            ],
+        })
+    return {"messages": [response], "agent_outcome": outcome.as_dict(),
+            "context_metrics": {**state.context_metrics, "model_usage": usage}}
+
+
+async def fail_run_node(state: AgentState) -> dict:
+    """The preceding agent update is durable before the run becomes an error.
+
+    Returning a friendly message alone would still mark the API run successful.
+    A separate node preserves the diagnostic while preventing memory extraction.
+    """
+    raise AgentRunError(f"Agent run failed: {state.agent_outcome.get('code', 'unknown')}")
 
 
 def selected_context_tools(config) -> list:
     from tools import ALL_TOOLS
     excluded = {"make_outbound_call", "get_recent_emails", "read_email", "get_email_accounts"} if _is_voice_channel(config) else set()
+    conf = config.get("configurable", {}) if isinstance(config, dict) else {}
+    if conf.get("channel") != "voice" or conf.get("call_type") not in {"inbound", "outbound"}:
+        excluded.add("request_end_call")
     return [tool for tool in ALL_TOOLS if tool.name not in excluded]
 
 
-async def prepare_context_node(state: AgentState, config) -> dict:
+async def prepare_context_node(state: AgentState, config, writer: StreamWriter) -> dict:
     """Run before EVERY invocation, including tools loops and voice turns."""
     user_id = require_user_id(config)
     thread_id = require_thread_id(config)
@@ -162,12 +208,14 @@ async def prepare_context_node(state: AgentState, config) -> dict:
         prepared = await ctx_manager.prepare(
             state.messages, state.system_instruction, selected_context_tools(config), user_id, thread_id,
             runtime_context=state.runtime_context,
+            on_progress=writer,
         )
         return {"prepared_messages": prepared.messages, "conversation_summary": prepared.summary,
                 "summarized_count": prepared.covered_count, "context_metrics": prepared.metrics,
                 "context_error": ""}
     except Exception as exc:
         logger.exception("context preparation failed; no main-model request sent")
+        writer({"type": "context_compaction", "status": "failed", "error_type": type(exc).__name__})
         return {"prepared_messages": [], "context_error": f"{type(exc).__name__}: {exc}",
                 "context_metrics": {"event": "context.failed", "error_type": type(exc).__name__}}
 

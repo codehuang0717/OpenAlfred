@@ -6,8 +6,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from core.config import config
-from logic.context_manager import ContextManager
-ctx_manager = ContextManager()
 from routers.auth import get_current_user, security
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
@@ -175,7 +173,8 @@ async def get_thread_messages(
                 if isinstance(block, str):
                     parts.append(block)
                 elif isinstance(block, dict):
-                    parts.append(str(block.get("text") or block.get("refusal") or ""))
+                    if block.get("type") in {"text", "output_text", "refusal"}:
+                        parts.append(str(block.get("text") or block.get("refusal") or ""))
             return "".join(parts)
         return str(content or "")
 
@@ -212,7 +211,24 @@ async def get_thread_messages(
                     "tools": [],
                 }
 
+            extra = msg.get("additional_kwargs") or {}
+            outcome = extra.get("agent_outcome") or {}
+            failure = extra.get("agent_failure")
+            # Old checkpoints can also contain the exact silent length failure.
+            # Expose the diagnostic on read; never rewrite canonical history.
+            if not outcome and (msg.get("response_metadata") or {}).get("finish_reason") == "length":
+                from logic.agent_outcome import failure_text
+                outcome = {"status": "failed"}
+                failure = failure_text("output_truncated")
+            elif not outcome and msg.get("tool_calls"):
+                outcome = {"status": "tools"}
+            if outcome.get("status") in {"tools", "completed", "failed"}:
+                current_ai_msg["outcome"] = outcome["status"]
+                if failure:
+                    current_ai_msg["failure"] = failure
             text = _plain_text(msg.get("content", ""))
+            if failure and failure not in text:
+                text += ("\n\n" if text else "") + "❌ " + failure
             if text.strip():
                 current_ai_msg["steps"].append({
                     "type": "text",
@@ -283,26 +299,25 @@ async def generate_thread_title(
             break
 
     if not first_user_msg:
-        return {"title": "新对话"}
+        raise HTTPException(status_code=422, detail="会话暂无可用于生成标题的用户消息")
 
     try:
-        from services.llm import get_model
-        from langchain_core.messages import HumanMessage
-
-        title_prompt = ctx_manager.build_title_prompt(first_user_msg)
-        llm = get_model("mimo-v2.6")
-        result = await llm.ainvoke([HumanMessage(content=title_prompt)])
-        title = result.content.strip().strip('"\'')[:20]
+        from services.thread_titles import generate_title
+        title = await generate_title(first_user_msg)
 
         async with httpx.AsyncClient() as client:
-            await client.patch(
+            saved = await client.patch(
                 f"{config.LANGGRAPH_API_URL}/threads/{thread_id}",
                 headers=headers,
                 json={"metadata": {"owner": user["id"], "title": title}},
                 timeout=10.0,
             )
+            saved.raise_for_status()
 
         return {"title": title}
     except Exception as e:
-        logger.error(f"Title generation failed: {e}")
-        return {"title": "新对话"}
+        logger.exception("Title generation or persistence failed for thread %s", thread_id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"会话标题生成或保存失败（{type(e).__name__}），请检查标题模型配置与服务日志",
+        ) from e

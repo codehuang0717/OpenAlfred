@@ -10,13 +10,20 @@ CALL_DATE_FORMAT_INSTRUCTION = (
     "需要直接转换成朗读稿而不是格式化的输出"
 )
 
+CALL_ENDING_INSTRUCTION = (
+    "若用户明确表示要结束本次通话，如说拜拜或请挂断，请调用 request_end_call 工具，"
+    "工具返回后只说一句简短自然的道别。感谢、暂停或结束话题不等于要求挂断。"
+)
+
 CALL_INBOUND_PROMPT = (
     "[系统指示] 用户呼入了你的热线。请以友好的方式接待。"
+    + CALL_ENDING_INSTRUCTION
     + CALL_DATE_FORMAT_INSTRUCTION
 )
 
 CALL_OUTBOUND_PROMPT = (
     "[系统指示] 你主动呼叫了用户。请以友好的方式开始对话。"
+    + CALL_ENDING_INSTRUCTION
     + CALL_DATE_FORMAT_INSTRUCTION
 )
 
@@ -25,6 +32,7 @@ def build_outbound_motivation_prompt(initial_speech: str) -> str:
     return (
         f'[系统指示] 你主动拨打了此电话。拨号动机: "{initial_speech}"。'
         "请基于此动机与用户对话。使用简洁、自然的口语回复，"
+        + CALL_ENDING_INSTRUCTION
         + CALL_DATE_FORMAT_INSTRUCTION
     )
 

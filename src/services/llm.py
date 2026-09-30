@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from core.config import config
+from services.mimo_chat import MiMoChatOpenAI
 
 logger = get_logger("llm_factory")
 
@@ -81,8 +82,34 @@ def _create_mimo_model() -> BaseChatModel:
     if not config.MIMO_API_KEY:
         logger.warning("MIMO_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
-    return ChatOpenAI(
+    return MiMoChatOpenAI(
         model=config.MIMO_CHAT_MODEL,
+        base_url=MIMO_BASE_URL,
+        api_key=config.MIMO_API_KEY,
+        streaming=True,
+        stream_usage=True,
+        extra_body={"thinking": {"type": "enabled"}},
+    )
+
+
+def _create_mimo_summary_model() -> BaseChatModel:
+    """Independent summary model; changing it does not change chat or memory."""
+    if not config.MIMO_API_KEY:
+        raise ValueError("MIMO_API_KEY is required for context summaries")
+    return MiMoChatOpenAI(
+        model=config.MIMO_SUMMARY_MODEL,
+        base_url=MIMO_BASE_URL,
+        api_key=config.MIMO_API_KEY,
+        streaming=True,
+    )
+
+
+def _create_mimo_title_model() -> BaseChatModel:
+    """Explicit lightweight model for thread titles."""
+    if not config.MIMO_API_KEY:
+        raise ValueError("MIMO_API_KEY is required for thread titles")
+    return MiMoChatOpenAI(
+        model=config.MIMO_TITLE_MODEL,
         base_url=MIMO_BASE_URL,
         api_key=config.MIMO_API_KEY,
         streaming=True,
@@ -90,15 +117,13 @@ def _create_mimo_model() -> BaseChatModel:
 
 
 def _create_mimo_v25_model() -> BaseChatModel:
-    """Non-pro MiMo (mimo-v2.6) for cheap tasks like thread titles."""
+    """Legacy selector, retained for existing non-title integrations."""
     if not config.MIMO_API_KEY:
         logger.warning("MIMO_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
     return ChatOpenAI(
-        model="mimo-v2.6",
-        base_url=MIMO_BASE_URL,
-        api_key=config.MIMO_API_KEY,
-        streaming=True,
+        model="mimo-v2.6", base_url=MIMO_BASE_URL,
+        api_key=config.MIMO_API_KEY, streaming=True,
     )
 
 
@@ -122,6 +147,8 @@ _factories = {
     "deepseek": _create_deepseek_model,
     "deepseek-pro": _create_deepseek_pro_model,
     "mimo": _create_mimo_model,
+    "mimo-summary": _create_mimo_summary_model,
+    "mimo-title": _create_mimo_title_model,
     "mimo-v2.6": _create_mimo_v25_model,
 }
 
@@ -131,7 +158,8 @@ def get_strict_model(selection: str) -> BaseChatModel:
     keys = {
         "gpt-cloud": "OPENAI_API_KEY", "cerebras": "CEREBRAS_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY", "deepseek-pro": "DEEPSEEK_API_KEY",
-        "mimo": "MIMO_API_KEY", "mimo-v2.6": "MIMO_API_KEY", "gemini": "GOOGLE_API_KEY",
+        "mimo": "MIMO_API_KEY", "mimo-summary": "MIMO_API_KEY", "mimo-title": "MIMO_API_KEY",
+        "mimo-v2.6": "MIMO_API_KEY", "gemini": "GOOGLE_API_KEY",
     }
     if selection not in _factories:
         raise ValueError(f"Unknown model selection: {selection}")
@@ -220,7 +248,9 @@ def get_bound_model(selection: str, tool_names: frozenset, all_tools: list) -> B
     avoid re-binding on every call — .bind_tools() creates schemas each time."""
     key = (selection, tool_names)
     if key not in _bound_cache:
-        base = get_model(selection)
+        # Selected main models never silently become another provider.
+        # No SDK retry: one observable outcome for each request.
+        base = get_strict_model(selection)
         if tool_names:
             tools = [t for t in all_tools if t.name in tool_names]
             _bound_cache[key] = base.bind_tools(tools)

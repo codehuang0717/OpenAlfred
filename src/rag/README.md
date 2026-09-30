@@ -70,7 +70,7 @@ _IMG_PLACEHOLDER regex → get_image_by_id() → ![alt](/api/images/doc_id/img.p
 | `RAG_CHUNK_OVERLAP` | `50` | 分块重叠 |
 | `RAG_TOP_K` | `5` | 默认检索数量 |
 
-图片描述使用 `.env` 中配置的 `MIMO_VISION_MODEL`（`mimo-v2.6`，不是 Pro）。
+图片描述使用 `.env` 中独立配置的 `MIMO_VISION_MODEL`（默认 `mimo-v2.6-flash`）。
 
 ## 数据存储
 

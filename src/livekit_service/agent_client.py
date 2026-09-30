@@ -1,11 +1,14 @@
+import asyncio
 import uuid
 import time
 import httpx
 import json
+from urllib.parse import urlparse
 from core.config import config
 from utils.logger import get_logger
 from utils.latency import latency_tracker
 from utils.auth_utils import mint_service_jwt
+from logic.voice_control import END_CALL_APPROVED
 from logic.prompts import (
     CALL_INBOUND_PROMPT,
     CALL_OUTBOUND_PROMPT,
@@ -17,6 +20,36 @@ logger = get_logger("livekit-agent-client")
 # Session-level metadata cache to pass info from entrypoint to call_agent
 # In a real decoupled system, this might be passed as arguments or stored in Redis
 session_metadata_cache = {}
+
+
+async def _cancel_voice_run(thread_id: str, run_id: str, headers: dict[str, str]) -> None:
+    """Interrupt this turn without rolling back already completed actions."""
+    try:
+        async with asyncio.timeout(5.0), httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{config.LANGGRAPH_API_URL}/threads/{thread_id}/runs/{run_id}/cancel",
+                headers=headers,
+                params={"action": "interrupt", "wait": "true"},
+                timeout=5.0,
+            )
+            if response.status_code == 404:
+                # Disconnect cancellation may win the race with this request.
+                # Confirm the exact run is terminal rather than hiding a 404.
+                state = await client.get(
+                    f"{config.LANGGRAPH_API_URL}/threads/{thread_id}/runs/{run_id}",
+                    headers=headers, timeout=5.0,
+                )
+                state.raise_for_status()
+                if state.json().get("status") in {"success", "error", "interrupted", "timeout"}:
+                    logger.info("[voice-cancel] server run already ended: %s", run_id)
+                    return
+            response.raise_for_status()
+        logger.info("[voice-cancel] server run stopped: %s", run_id)
+    except Exception:
+        # Disconnect cancellation remains active even if this confirmation fails.
+        logger.error("[voice-cancel] could not confirm cancellation: %s", run_id,
+                     exc_info=True)
+
 
 async def _ensure_thread(session_id: str, user_id: str, title: str, call_type: str = "inbound") -> dict:
     """Create or get a LangGraph thread for this voice session."""
@@ -108,10 +141,14 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
         "Content-Type": "application/json",
     }
 
+    run_id = None
+    stream_finished = False
     try:
         latency_tracker.start("llm_graph_invoke")
         final_text = ""
         message_yielded = False
+        end_call_tool_ids: set[str] = set()
+        end_call_approved = False
         llm_timed = False
         async with httpx.AsyncClient() as client:
             async with client.stream(
@@ -126,12 +163,15 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                         "user_id": user_id,
                     },
                     "stream_mode": ["updates"],
+                    "on_disconnect": "cancel",
+                    "multitask_strategy": "interrupt",
                     "config": {
                         "configurable": {
                             "thread_id": thread_uuid,
                             "user_id": user_id,
                             "owner": user_id,
                             "channel": "voice",
+                            "call_type": call_type,
                         },
                     },
                     "metadata": {
@@ -150,11 +190,33 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                     yield "message", "抱歉，我暂时无法处理你的请求。"
                     return
 
+                # The response header identifies the run before its first SSE event.
+                location = urlparse(response.headers.get("Content-Location", "")).path
+                prefix = f"/threads/{thread_uuid}/runs/"
+                if location.startswith(prefix):
+                    run_id = str(uuid.UUID(location[len(prefix):]))
+                sse_event = ""
                 async for line in response.aiter_lines():
+                    if line.startswith("event: "):
+                        sse_event = line[7:].strip()
                     if line.startswith("data: "):
                         try:
                             data = json.loads(line[6:])
+                            if sse_event == "metadata":
+                                run_id = str(uuid.UUID(data["run_id"]))
+                                continue
+                            if sse_event == "error":
+                                raise RuntimeError(f"Agent run failed: {data}")
                             for node_name, state_update in _iter_update_nodes(data):
+                                if node_name == "tools" and isinstance(state_update, dict):
+                                    for tool_msg in state_update.get("messages") or []:
+                                        if not isinstance(tool_msg, dict):
+                                            continue
+                                        if (tool_msg.get("tool_call_id") in end_call_tool_ids
+                                                and tool_msg.get("name") == "request_end_call"
+                                                and tool_msg.get("content") == END_CALL_APPROVED):
+                                            end_call_approved = True
+                                    continue
                                 if node_name != "agent" or not isinstance(state_update, dict):
                                     continue
                                 messages = state_update.get("messages") or []
@@ -168,7 +230,10 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                                 if tool_calls:
                                     for tc in tool_calls:
                                         name = tc.get("name") if isinstance(tc, dict) else None
-                                        if name:
+                                        if name == "request_end_call":
+                                            if tc.get("id"):
+                                                end_call_tool_ids.add(tc["id"])
+                                        elif name:
                                             yield "tool_call", name
 
                                 content = last_msg.get("content", "")
@@ -190,19 +255,29 @@ async def call_agent(session_id: str, text: str, user_id: str, model_selection: 
                                         len(final_text),
                                     )
                                     yield "message", final_text
+                                    if end_call_approved:
+                                        # Notify playback immediately, but keep the stream
+                                        # owned until completion or explicit cancellation.
+                                        yield "end_call_requested", True
                         except json.JSONDecodeError:
                             continue
+                stream_finished = True
 
         if not llm_timed:
             latency_tracker.end("llm_graph_invoke")
             latency_tracker.end("llm_total")
 
         if not message_yielded:
-            yield "message", final_text or "收到"
+            yield "message", "抱歉，我暂时无法结束通话。" if end_call_approved else final_text or "收到"
             
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Voice Agent Error: {e}", exc_info=True)
         yield "message", "抱歉，我暂时无法处理你的请求。"
+    finally:
+        if run_id is not None and not stream_finished:
+            await _cancel_voice_run(thread_uuid, run_id, headers)
 
 
 def _iter_update_nodes(data):

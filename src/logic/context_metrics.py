@@ -7,6 +7,8 @@ def model_usage_metrics(response, model: str, elapsed_ms: int) -> dict:
     raw = metadata.get("token_usage") or metadata.get("usage") or {}
     details = usage.get("input_token_details") or {}
     raw_details = raw.get("prompt_tokens_details") or {}
+    output_details = usage.get("output_token_details") or {}
+    raw_output_details = raw.get("completion_tokens_details") or {}
 
     def reported(*values):
         for value in values:
@@ -18,6 +20,9 @@ def model_usage_metrics(response, model: str, elapsed_ms: int) -> dict:
         "event": "context.model_usage", "model": model,
         "input_tokens": reported(usage.get("input_tokens"), raw.get("prompt_tokens")),
         "output_tokens": reported(usage.get("output_tokens"), raw.get("completion_tokens")),
+        "reasoning_tokens": reported(output_details.get("reasoning"), raw_output_details.get("reasoning_tokens")),
+        "finish_reason": metadata.get("finish_reason") or metadata.get("done_reason"),
+        "provider_status": metadata.get("status"),
         "cache_read_tokens": reported(details.get("cache_read"), raw.get("prompt_cache_hit_tokens"), raw_details.get("cached_tokens")),
         "call_elapsed_ms": elapsed_ms,
         "source": "provider_reported; missing values are null; elapsed is not TTFT",

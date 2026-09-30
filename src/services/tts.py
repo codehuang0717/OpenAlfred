@@ -27,6 +27,7 @@ async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGen
 
     try:
         t_prev = None
+        received_audio = False
         timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient() as client:
             async with client.stream("POST", url, json=payload, timeout=timeout) as response:
@@ -53,11 +54,14 @@ async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGen
                     else:
                         logger.info("TTS first network bytes=%d", len(chunk))
                     t_prev = now
+                    received_audio = True
                     yield chunk
 
-                # Final padding: 250ms of silence to ensure the last word isn't cut off by audio pipelines
-                silence_padding = np.zeros(int(target_sample_rate * 0.25), dtype=np.int16)
-                yield silence_padding.tobytes()
+                if received_audio:
+                    # Padding only makes sense after real speech; an empty stream
+                    # must not count as a successfully played goodbye.
+                    silence_padding = np.zeros(int(target_sample_rate * 0.25), dtype=np.int16)
+                    yield silence_padding.tobytes()
 
     except Exception as e:
         logger.error(f"Error in TTS streaming: {e}")
