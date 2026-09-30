@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 import aiosqlite
 import httpx
 from fastapi import FastAPI
-from openai import APIConnectionError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -19,9 +18,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from db import connection  # noqa: E402
 from db.user_apps import (  # noqa: E402
     create_code_app_job, create_code_app_revision_job, delete_user_app,
-    fail_interrupted_web_revisions, finish_code_app_job, get_user_app, list_user_apps,
-    publish_user_app_revision, set_code_app_job_stage,
+    finish_code_app_job, get_user_app, list_user_apps, publish_user_app_revision,
 )
+from db.coding_jobs import claim_job, expire_jobs, progress
 from services import user_apps as app_service  # noqa: E402
 from services import code_apps  # noqa: E402
 from routers.auth import get_current_user  # noqa: E402
@@ -102,7 +101,7 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
             }}
         )
         with patch("tools.user_apps.create_code_app", new_callable=AsyncMock) as create:
-            create.return_value = {"status": "ready", "app_id": "app", "revision_id": "rev"}
+            create.return_value = {"status": "queued", "app_id": "app", "job_id": "job"}
             result = await create_standalone_mini_app.coroutine(
                 runtime=runtime, title="时钟", requirements="创建一个简单的桌面时钟小程序"
             )
@@ -164,12 +163,13 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
         )
         await publish_user_app_revision("alice", first["app_id"], first_revision)
         self.assertIsNone(await create_code_app_revision_job("bob", first["app_id"]))
-        job = await create_code_app_revision_job("alice", first["app_id"])
+        job = await create_code_app_revision_job("alice", first["app_id"], queued=True)
         self.assertEqual(job["model"], "gpt-cloud")
         self.assertEqual(job["previous_source"], source)
         with self.assertRaisesRegex(ValueError, "正在进行"):
             await create_code_app_revision_job("alice", first["app_id"])
-        await set_code_app_job_stage("alice", job["job_id"], "validation")
+        claimed = await claim_job("test-worker", 2)
+        await progress(claimed, "validation", "正在验证")
         generating = await get_user_app("alice", first["app_id"])
         self.assertEqual(generating["latest_job"]["stage"], "validation")
         self.assertEqual(generating["published_revision_id"], first_revision)
@@ -187,12 +187,12 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
         )
         await publish_user_app_revision("alice", first["app_id"], revision_id)
         await create_code_app_revision_job("alice", first["app_id"])
-        self.assertEqual(await fail_interrupted_web_revisions(), 1)
+        self.assertEqual(await expire_jobs(), 1)
         app = await get_user_app("alice", first["app_id"])
         self.assertEqual(app["status"], "published")
         self.assertEqual(app["published_revision_id"], revision_id)
-        self.assertEqual(app["latest_job"]["status"], "failed")
-        self.assertIn("服务重启", app["latest_job"]["error"])
+        self.assertEqual(app["latest_job"]["status"], "interrupted")
+        self.assertIn("服务中断", app["latest_job"]["error"])
         self.assertIsNotNone(await create_code_app_revision_job("alice", first["app_id"]))
 
     async def test_responsive_revision_saves_new_draft_without_publishing(self):
@@ -207,12 +207,9 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
         new_source = code_apps.CodeAppSource(
             html="<main>Clock</main>", css="main{width:100%;display:grid}", javascript="",
         )
-        with patch.object(code_apps.config, "OPENAI_API_KEY", "test-key"), \
-             patch.object(code_apps, "write_code_source", new_callable=AsyncMock, return_value=new_source) as write, \
-             patch.object(code_apps.event_bus, "publish", new_callable=AsyncMock):
-            result = await code_apps.complete_code_app_revision("alice", job)
-        self.assertEqual(result["status"], "ready")
-        self.assertEqual(write.await_args.kwargs["previous_source"], old_source)
+        self.assertEqual(job["previous_source"], old_source)
+        await finish_code_app_job("alice", job["job_id"], source=new_source.model_dump(),
+                                  validation=code_apps.validate_code_source(new_source))
         app = await get_user_app("alice", first["app_id"])
         self.assertEqual(app["status"], "published")
         self.assertEqual(app["published_revision_id"], first_revision)
@@ -283,7 +280,7 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.include_router(user_app_router)
         app.dependency_overrides[get_current_user] = lambda: {"id": "bob"}
-        with patch("routers.user_apps.complete_code_app_revision", new_callable=AsyncMock) as generate, \
+        with patch("routers.user_apps.coding_context", new_callable=AsyncMock, return_value={"timezone": "Asia/Shanghai", "model_name": "fake-model"}), \
              patch("routers.user_apps.event_bus.publish", new_callable=AsyncMock):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -295,8 +292,60 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
                 duplicate = await client.post(f"/api/user-apps/{first['app_id']}/responsive-revision")
         self.assertEqual(accepted.status_code, 202)
         self.assertEqual(duplicate.status_code, 409)
-        generate.assert_awaited_once()
+        self.assertEqual(accepted.json()["status"], "queued")
         self.assertEqual((await get_user_app("alice", first["app_id"]))["latest_job"]["stage"], "model")
+
+    async def test_legacy_html_injection_is_not_republished_or_silently_rewritten(self):
+        first = await create_code_app_job("alice", "Legacy", "保留已有面板功能并修订安全接口", "gpt-cloud")
+        source = {"html": "<main></main>", "css": "", "javascript": "document.body.innerHTML = '<p>old</p>';"}
+        revision_id = await finish_code_app_job("alice", first["job_id"], source=source,
+            validation={"javascript_syntax": "passed", "data_access": "none"})
+        app = FastAPI()
+        app.include_router(user_app_router)
+        app.dependency_overrides[get_current_user] = lambda: {"id": "alice"}
+        with patch("routers.user_apps.coding_context", new_callable=AsyncMock,
+                   return_value={"timezone": "Asia/Shanghai", "model_name": "fake-model"}), \
+                patch("routers.user_apps.event_bus.publish", new_callable=AsyncMock):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                blocked = await client.post(f"/api/user-apps/{first['app_id']}/publish", json={"revision_id": revision_id})
+                self.assertEqual(blocked.status_code, 422)
+                self.assertIn("生成兼容草稿", blocked.json()["detail"])
+                queued = await client.post(f"/api/user-apps/{first['app_id']}/responsive-revision")
+                self.assertEqual(queued.status_code, 202)
+        after = await get_user_app("alice", first["app_id"])
+        self.assertIsNone(after["published_revision_id"])
+        self.assertEqual(after["revisions"][0]["source"], source)
+        async with connection.get_db() as db:
+            async with db.execute("SELECT prompt FROM user_app_jobs WHERE id = ?", (queued.json()["job_id"],)) as cursor:
+                self.assertIn("innerHTML", (await cursor.fetchone())[0])
+
+    async def test_publish_revalidates_safe_source_and_reports_validator_unavailability(self):
+        first = await create_code_app_job("alice", "Safe", "创建一个安全的简单面板小程序", "gpt-cloud")
+        revision_id = await finish_code_app_job("alice", first["job_id"],
+            source={"html": "<main>Ready</main>", "css": "", "javascript": ""},
+            validation={"javascript_syntax": "passed", "data_access": "none"})
+        app = FastAPI()
+        app.include_router(user_app_router)
+        app.dependency_overrides[get_current_user] = lambda: {"id": "alice"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            with patch("routers.user_apps.validate_code_source", side_effect=RuntimeError("Node unavailable")):
+                unavailable = await client.post(f"/api/user-apps/{first['app_id']}/publish", json={"revision_id": revision_id})
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertIsNone((await get_user_app("alice", first["app_id"]))["published_revision_id"])
+            with patch("routers.user_apps.event_bus.publish", new_callable=AsyncMock):
+                published = await client.post(f"/api/user-apps/{first['app_id']}/publish", json={"revision_id": revision_id})
+        self.assertEqual(published.status_code, 200)
+        self.assertEqual(published.json()["published_revision_id"], revision_id)
+
+    def test_validation_distinguishes_function_callbacks_from_dynamic_constructor(self):
+        for javascript in ["(function(){ const n = 1; })();", "setTimeout(function () {}, 100);",
+                           "document.querySelector('button').addEventListener('click', function(event) {});"]:
+            result = code_apps.validate_code_source(code_apps.CodeAppSource(
+                html="<button>Run</button>", css="", javascript=javascript))
+            self.assertEqual(result["javascript_syntax"], "passed")
+        for javascript in ["Function('return 1')();", "new Function('return 1')();", "window.Function('return 1')();"]:
+            with self.assertRaisesRegex(ValueError, "dynamic execution"):
+                code_apps.validate_code_source(code_apps.CodeAppSource(html="<button/>", css="", javascript=javascript))
 
     def test_validation_parses_javascript_without_executing_it(self):
         with self.assertRaises(ValueError):
@@ -329,114 +378,34 @@ class TestUserApps(unittest.IsolatedAsyncioTestCase):
         self.assertIn("不要用 320px 的固定宽度", code_apps.SYSTEM_PROMPT)
         self.assertIn("devicePixelRatio", code_apps.SYSTEM_PROMPT)
 
-    async def test_codegen_repairs_invalid_model_output_once(self):
-        class FakeModel:
-            def __init__(self):
-                self.contents = [
-                    '{"html":"<p>Broken</p>","css":"","javascript":"function {"}',
-                    '{"html":"<p>Ready</p>","css":"","javascript":"const ready = true;"}',
-                ]
-
-            async def ainvoke(self, _messages, config=None):
-                return SimpleNamespace(content=self.contents.pop(0))
-
-        with patch.object(code_apps.config, "OPENAI_API_KEY", "test-key"), \
-             patch.object(code_apps, "ChatOpenAI", return_value=FakeModel()):
-            source = await code_apps.write_code_source(
-                code_apps.CodeAppRequest(
-                    title="时钟", prompt="创建一个显示当前时间的时钟小程序"
-                ), code_apps.create_codegen_model("gpt-cloud"),
-            )
-        self.assertIn("ready", source.javascript)
-
-    async def test_codegen_reports_model_and_validation_stages(self):
-        class FakeModel:
-            def __init__(self):
-                self.config = None
-
-            async def ainvoke(self, _messages, config=None):
-                self.config = config
-                return SimpleNamespace(content='{"html":"<main>OK</main>","css":"main{width:100%}","javascript":""}')
-
-        stages = []
-        model = FakeModel()
-
-        async def report(stage):
-            stages.append(stage)
-
-        await code_apps.write_code_source(
-            code_apps.CodeAppRequest(title="时钟", prompt="创建一个简单的桌面时钟小程序"),
-            model, on_stage=report,
-        )
-        self.assertEqual(stages, ["validation"])
-        self.assertEqual(model.config, {"callbacks": []})
-
-    async def test_responsive_revision_prompt_includes_existing_source(self):
-        class FakeModel:
-            def __init__(self):
-                self.prompt = ""
-
-            async def ainvoke(self, messages, config=None):
-                self.prompt = messages[1].content
-                return SimpleNamespace(content='{"html":"<main>OK</main>","css":"main{width:100%}","javascript":""}')
-
-        model = FakeModel()
-        await code_apps.write_code_source(
-            code_apps.CodeAppRequest(title="时钟", prompt="创建一个简单的桌面时钟小程序"),
-            model, previous_source={"html": "<main>旧版</main>", "css": "", "javascript": ""},
-        )
-        self.assertIn("保留现有功能", model.prompt)
-        self.assertIn("<main>旧版</main>", model.prompt)
-
     def test_codegen_model_selection_never_falls_back(self):
-        with patch.object(code_apps.config, "DEEPSEEK_API_KEY", "deepseek-key"), \
-             patch.object(code_apps, "ChatOpenAI") as chat:
-            code_apps.create_codegen_model("deepseek")
-        self.assertEqual(chat.call_args.kwargs["base_url"], "https://api.deepseek.com/v1")
-        self.assertEqual(chat.call_args.kwargs["model"], code_apps.config.DEEPSEEK_FLASH_MODEL)
-        with patch.object(code_apps.config, "DEEPSEEK_API_KEY", ""), \
-             patch.object(code_apps, "ChatOpenAI") as chat:
-            with self.assertRaisesRegex(RuntimeError, "DEEPSEEK_API_KEY"):
+        with patch.object(code_apps, "get_strict_model", return_value="selected") as strict:
+            self.assertEqual(code_apps.create_codegen_model("deepseek"), "selected")
+            strict.assert_called_once_with("deepseek", isolated_http_clients=True)
+        from core.config import config
+        with patch.object(config, "DEEPSEEK_API_KEY", ""):
+            with self.assertRaisesRegex(ValueError, "DEEPSEEK_API_KEY"):
                 code_apps.create_codegen_model("deepseek")
-            chat.assert_not_called()
-        with self.assertRaisesRegex(ValueError, "不支持"):
+        with self.assertRaisesRegex(ValueError, "Unknown"):
             code_apps.create_codegen_model("unknown")
 
-    async def test_codegen_service_stores_preview_without_publishing(self):
-        source = code_apps.CodeAppSource(
-            html="<button>Start</button>", css="", javascript="const ready = true;"
-        )
-        with patch.object(code_apps.config, "OPENAI_API_KEY", "test-key"), \
-             patch.object(code_apps, "write_code_source", new_callable=AsyncMock, return_value=source), \
+    async def test_codegen_service_queues_without_publishing(self):
+        with patch.object(code_apps, "coding_context", new_callable=AsyncMock, return_value={"timezone": "Asia/Shanghai", "model_name": "fake-model"}), \
              patch.object(code_apps.event_bus, "publish", new_callable=AsyncMock):
             result = await code_apps.create_code_app(
                 "alice", code_apps.CodeAppRequest(
                     title="计时器", prompt="创建一个可以开始暂停的计时器小程序"
                 ), "gpt-cloud",
             )
-        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["status"], "queued")
         app = await get_user_app("alice", result["app_id"])
         self.assertIsNone(app["published_revision_id"])
-        self.assertEqual(app["revisions"][0]["source"]["html"], "<button>Start</button>")
-
-    async def test_codegen_connection_failure_names_selected_model(self):
-        with patch.object(code_apps.config, "DEEPSEEK_API_KEY", "test-key"), \
-             patch.object(code_apps, "write_code_source", new_callable=AsyncMock) as write, \
-             patch.object(code_apps.event_bus, "publish", new_callable=AsyncMock):
-            write.side_effect = APIConnectionError(request=httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions"))
-            result = await code_apps.create_code_app(
-                "alice", code_apps.CodeAppRequest(
-                    title="计时器", prompt="创建一个可以开始暂停的计时器小程序"
-                ), "deepseek",
-            )
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("deepseek", result["error"])
-        self.assertIn("未切换模型", result["error"])
-        app = await get_user_app("alice", result["app_id"])
         self.assertEqual(app["revisions"], [])
-        async with connection.get_db() as db:
-            async with db.execute("SELECT model FROM user_app_jobs WHERE id = ?", (result["job_id"],)) as cursor:
-                self.assertEqual((await cursor.fetchone())[0], "deepseek")
+
+    async def test_codegen_invalid_identity_never_queues(self):
+        with self.assertRaises(MissingUserContextError):
+            await code_apps.create_code_app("default", code_apps.CodeAppRequest(
+                title="计时器", prompt="创建一个可以开始暂停的计时器小程序"), "deepseek")
 
     async def test_old_timeline_schema_migrates_without_changing_app_id(self):
         legacy_path = str(Path(self.directory.name) / "legacy.db")

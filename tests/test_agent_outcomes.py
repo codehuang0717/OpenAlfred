@@ -230,6 +230,24 @@ class TestRunLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ConnectionError", result["messages"][0].content)
         model.ainvoke.assert_awaited_once()
 
+    async def test_chat_failure_does_not_claim_submitted_coder_failed(self):
+        task = json.dumps({"type": "coding_task", "title": "Calculator",
+                           "job_id": "12345678-1234-1234-1234-123456789abc",
+                           "app_id": "87654321-1234-1234-1234-123456789abc"})
+        messages = [HumanMessage(content="create"), ToolMessage(content=task,
+                    name="create_standalone_mini_app", tool_call_id="submitted")]
+        model = SimpleNamespace(ainvoke=AsyncMock(side_effect=ConnectionError("transport failed")))
+        with patch.object(nodes, "get_bound_model", return_value=model), patch.object(nodes.logger, "exception") as log:
+            result = await nodes.agent_node(AgentState(messages=messages, prepared_messages=messages), {}, lambda _: None)
+            log.assert_called_once()
+        self.assertIn("不代表后台编码失败", result["messages"][0].content)
+        self.assertEqual(result["agent_outcome"]["status"], "failed")
+        model.ainvoke.assert_awaited_once()
+        messages.append(HumanMessage(content="unrelated next request"))
+        with patch.object(nodes, "get_bound_model", return_value=model):
+            result = await nodes.agent_node(AgentState(messages=messages, prepared_messages=messages), {}, lambda _: None)
+        self.assertNotIn("不代表后台编码失败", result["messages"][0].content)
+
 
 class TestOutcomeHistory(unittest.IsolatedAsyncioTestCase):
     async def history(self, messages):

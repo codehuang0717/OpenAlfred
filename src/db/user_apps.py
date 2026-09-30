@@ -40,6 +40,10 @@ async def list_user_apps(user_id: str) -> list[dict]:
                  ORDER BY j.created_at DESC LIMIT 1) AS job_stage,
                 (SELECT error FROM user_app_jobs j WHERE j.app_id = a.id
                  ORDER BY j.created_at DESC LIMIT 1) AS job_error,
+                (SELECT id FROM user_app_jobs j WHERE j.app_id = a.id
+                 ORDER BY j.created_at DESC LIMIT 1) AS job_id,
+                (SELECT report FROM user_app_jobs j WHERE j.app_id = a.id
+                 ORDER BY j.created_at DESC LIMIT 1) AS job_report,
                 (SELECT COUNT(*) FROM user_app_revisions r
                  WHERE r.app_id = a.id AND r.user_id = a.user_id
                    AND r.status = 'ready'
@@ -72,7 +76,8 @@ async def get_user_app(user_id: str, app_id: str) -> dict | None:
             revisions = await cursor.fetchall()
         async with db.execute(
             """
-            SELECT id, status, stage, model, error, revision_id, created_at, updated_at
+            SELECT id, status, stage, model, error, report, metrics_json, epoch,
+                   revision_id, created_at, updated_at
             FROM user_app_jobs WHERE app_id = ? AND user_id = ?
             ORDER BY created_at DESC LIMIT 1
             """,
@@ -96,6 +101,8 @@ async def get_user_app(user_id: str, app_id: str) -> dict | None:
         if item["status"] == "ready" and item["id"] != result["published_revision_id"]
     )
     result["latest_job"] = dict(job) if job else None
+    if result["latest_job"]:
+        result["latest_job"]["metrics"] = json.loads(result["latest_job"].pop("metrics_json"))
     return result
 
 
@@ -149,7 +156,10 @@ async def save_user_app(user_id: str, kind: str, title: str, spec: dict) -> dict
     return result
 
 
-async def create_code_app_job(user_id: str, title: str, prompt: str, model: str) -> dict:
+async def create_code_app_job(
+    user_id: str, title: str, prompt: str, model: str, *,
+    context: dict | None = None, queued: bool = False,
+) -> dict:
     user_id = require_explicit_user_id(user_id)
     now = _now()
     app_id, job_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -166,16 +176,20 @@ async def create_code_app_job(user_id: str, title: str, prompt: str, model: str)
         await db.execute(
             """
             INSERT INTO user_app_jobs
-                (id, user_id, app_id, prompt, model, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'generating', ?, ?)
+                (id, user_id, app_id, prompt, model, status, context_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (job_id, user_id, app_id, prompt, model, now, now),
+            (job_id, user_id, app_id, prompt, model, "queued" if queued else "generating",
+             json.dumps(context or {}, ensure_ascii=False), now, now),
         )
         await db.commit()
     return {"app_id": app_id, "job_id": job_id}
 
 
-async def create_code_app_revision_job(user_id: str, app_id: str) -> dict | None:
+async def create_code_app_revision_job(
+    user_id: str, app_id: str, *, context: dict | None = None, queued: bool = False,
+    requirements: str | None = None,
+) -> dict | None:
     """Start a new draft for an owned code app, preserving its published revision."""
     user_id = require_explicit_user_id(user_id)
     now = _now()
@@ -198,7 +212,7 @@ async def create_code_app_revision_job(user_id: str, app_id: str) -> dict | None
             await db.rollback()
             raise ValueError("这个小程序已有正在进行的生成任务")
         async with db.execute(
-            "SELECT prompt, model FROM user_app_jobs WHERE app_id = ? AND user_id = ? AND status = 'ready' ORDER BY created_at DESC LIMIT 1",
+            "SELECT prompt, model, context_json FROM user_app_jobs WHERE app_id = ? AND user_id = ? AND status = 'ready' ORDER BY created_at DESC LIMIT 1",
             (app_id, user_id),
         ) as cursor:
             previous_job = await cursor.fetchone()
@@ -211,67 +225,35 @@ async def create_code_app_revision_job(user_id: str, app_id: str) -> dict | None
             await db.rollback()
             raise ValueError("没有可修订的已验证代码版本")
         job_id = str(uuid.uuid4())
+        job_context = json.loads(previous_job["context_json"])
+        job_context.update(context or {})
+        job_context["previous_source"] = json.loads(revision["source_json"])
+        prompt = requirements or (previous_job["prompt"] + "\n保留现有内容与交互，修改为窄屏和宽屏自适应布局。"
+                                 "兼容当前快照安全规则：将 innerHTML/outerHTML/insertAdjacentHTML 和内联事件"
+                                 "改为 createElement/textContent/replaceChildren/addEventListener；"
+                                 "禁止网络、导航、表单和动态执行。不要覆盖旧版本，只交付可预览草稿。")
         await db.execute(
             """
             INSERT INTO user_app_jobs
-                (id, user_id, app_id, prompt, model, status, stage, origin, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'generating', 'model', 'web_revision', ?, ?)
+                (id, user_id, app_id, prompt, model, status, stage, origin,
+                 context_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'model', 'web_revision', ?, ?, ?)
             """,
-            (job_id, user_id, app_id, previous_job["prompt"], previous_job["model"], now, now),
+            (job_id, user_id, app_id, prompt, previous_job["model"],
+             "queued" if queued else "generating", json.dumps(job_context, ensure_ascii=False), now, now),
         )
         await db.commit()
     return {
         "app_id": app_id, "job_id": job_id, "title": app["title"],
-        "prompt": previous_job["prompt"], "model": previous_job["model"],
+        "prompt": prompt, "model": previous_job["model"],
         "previous_source": json.loads(revision["source_json"]),
     }
-
-
-async def fail_interrupted_web_revisions() -> int:
-    """In-process revision tasks cannot survive an API process restart."""
-    now = _now()
-    async with get_db() as db:
-        await db.execute("BEGIN IMMEDIATE")
-        cursor = await db.execute(
-            """
-            UPDATE user_app_jobs
-            SET status = 'failed', error = '服务重启中断了生成任务，请重新生成响应式草稿', updated_at = ?
-            WHERE origin = 'web_revision' AND status IN ('queued', 'generating')
-            """,
-            (now,),
-        )
-        await db.execute(
-            """
-            UPDATE user_apps SET updated_at = ?
-            WHERE id IN (
-                SELECT app_id FROM user_app_jobs
-                WHERE origin = 'web_revision' AND status = 'failed' AND updated_at = ?
-            )
-            """,
-            (now, now),
-        )
-        await db.commit()
-    return cursor.rowcount
-
-
-async def set_code_app_job_stage(user_id: str, job_id: str, stage: str) -> None:
-    user_id = require_explicit_user_id(user_id)
-    if stage not in {"model", "validation"}:
-        raise ValueError("Invalid code generation stage")
-    async with get_db() as db:
-        cursor = await db.execute(
-            "UPDATE user_app_jobs SET stage = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'generating'",
-            (stage, _now(), job_id, user_id),
-        )
-        if cursor.rowcount != 1:
-            await db.rollback()
-            raise ValueError("Generation job is missing or not active")
-        await db.commit()
 
 
 async def finish_code_app_job(
     user_id: str, job_id: str, *, source: dict | None = None,
     validation: dict | None = None, error: str | None = None,
+    epoch: int | None = None, report: str | None = None, metrics: dict | None = None,
 ) -> str | None:
     """Store a validated candidate or an explicit failure; never auto-publish."""
     user_id = require_explicit_user_id(user_id)
@@ -287,12 +269,14 @@ async def finish_code_app_job(
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
         async with db.execute(
-            "SELECT app_id, status FROM user_app_jobs WHERE id = ? AND user_id = ?",
+            "SELECT app_id, status, epoch FROM user_app_jobs WHERE id = ? AND user_id = ?",
             (job_id, user_id),
         ) as cursor:
             job = await cursor.fetchone()
         if job is None or job["status"] != "generating":
             raise ValueError("Generation job is missing or not active")
+        if epoch is not None and epoch != job["epoch"]:
+            raise ValueError("Generation attempt is no longer active")
         app_id = job["app_id"]
         revision_id = None
         if source is not None:
@@ -314,10 +298,12 @@ async def finish_code_app_job(
             )
         await db.execute(
             """
-            UPDATE user_app_jobs SET status = ?, error = ?, revision_id = ?, updated_at = ?
+            UPDATE user_app_jobs SET status = ?, error = ?, revision_id = ?, updated_at = ?,
+                report = ?, metrics_json = ?, lease_until = NULL, runner_id = NULL
             WHERE id = ? AND user_id = ?
             """,
-            ("ready" if source is not None else "failed", error, revision_id, now, job_id, user_id),
+            ("ready" if source is not None else "failed", error, revision_id, now,
+             report, json.dumps(metrics or {}), job_id, user_id),
         )
         await db.execute(
             """

@@ -265,7 +265,7 @@ async def init_db():
                 app_id TEXT NOT NULL,
                 prompt TEXT NOT NULL,
                 model TEXT NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('queued', 'generating', 'ready', 'failed')),
+                status TEXT NOT NULL CHECK(status IN ('queued', 'generating', 'ready', 'failed', 'cancelled', 'interrupted')),
                 error TEXT,
                 revision_id TEXT,
                 created_at TEXT NOT NULL,
@@ -275,6 +275,48 @@ async def init_db():
         """)
         await _ensure_column(db, "user_app_jobs", "stage", "TEXT NOT NULL DEFAULT 'model'")
         await _ensure_column(db, "user_app_jobs", "origin", "TEXT NOT NULL DEFAULT 'tool'")
+        # SQLite cannot ALTER a CHECK constraint. Preserve legacy job records
+        # while extending the lifecycle; this migration is transactional.
+        async with db.execute("SELECT sql FROM sqlite_master WHERE name = 'user_app_jobs'") as cursor:
+            jobs_sql = (await cursor.fetchone())[0]
+        if "'cancelled'" not in jobs_sql:
+            await db.execute("ALTER TABLE user_app_jobs RENAME TO user_app_jobs_legacy")
+            await db.execute("""
+                CREATE TABLE user_app_jobs (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, app_id TEXT NOT NULL,
+                    prompt TEXT NOT NULL, model TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN
+                        ('queued', 'generating', 'ready', 'failed', 'cancelled', 'interrupted')),
+                    error TEXT, revision_id TEXT, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, stage TEXT NOT NULL DEFAULT 'model',
+                    origin TEXT NOT NULL DEFAULT 'tool',
+                    FOREIGN KEY(app_id) REFERENCES user_apps(id) ON DELETE CASCADE
+                )
+            """)
+            await db.execute("""
+                INSERT INTO user_app_jobs SELECT id, user_id, app_id, prompt, model,
+                    status, error, revision_id, created_at, updated_at, stage, origin
+                FROM user_app_jobs_legacy
+            """)
+            await db.execute("DROP TABLE user_app_jobs_legacy")
+        for column, definition in {
+            "context_json": "TEXT NOT NULL DEFAULT '{}'",
+            "report": "TEXT",
+            "metrics_json": "TEXT NOT NULL DEFAULT '{}'",
+            "epoch": "INTEGER NOT NULL DEFAULT 0",
+            "runner_id": "TEXT",
+            "lease_until": "REAL",
+        }.items():
+            await _ensure_column(db, "user_app_jobs", column, definition)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_coding_jobs_queue ON user_app_jobs(status, created_at)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_app_job_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
+                user_id TEXT NOT NULL, stage TEXT NOT NULL, message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES user_app_jobs(id) ON DELETE CASCADE
+            )
+        """)
         # Existing trusted timeline panels become revision 1 without changing
         # their IDs or published behavior.
         await db.execute("""
@@ -324,11 +366,11 @@ from contextlib import asynccontextmanager
 async def get_db() -> aiosqlite.Connection:
     """Async context manager: yields a DB connection with recommended PRAGMAs."""
     db = await aiosqlite.connect(DATABASE_PATH)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA busy_timeout=5000")
-    await db.execute("PRAGMA foreign_keys=ON")
-    await db.execute("PRAGMA synchronous=NORMAL")
     try:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("PRAGMA synchronous=NORMAL")
         yield db
     finally:
         await db.close()

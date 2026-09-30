@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from core.database import init_db
 from core.event_bus import event_bus
-from db.user_apps import fail_interrupted_web_revisions
+from services.coding_worker import CodingWorker
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag, memory, user_apps
 from routers import generated_images
 
@@ -30,18 +30,18 @@ logger = get_logger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    interrupted = await fail_interrupted_web_revisions()
-    if interrupted:
-        logger.warning("Marked %d interrupted responsive revisions as failed", interrupted)
     await event_bus.connect()
-
-    logger.info("Database initialized. EventBus connected.")
-    from rag.embedding import get_embedding_model
-    threading.Thread(target=get_embedding_model, daemon=True, name="embed-warmup").start()
-
-    yield
-
-    await event_bus.close()
+    coding_worker = CodingWorker()
+    try:
+        await coding_worker.start()
+        app.state.coding_worker = coding_worker
+        logger.info("Database initialized. EventBus connected.")
+        from rag.embedding import get_embedding_model
+        threading.Thread(target=get_embedding_model, daemon=True, name="embed-warmup").start()
+        yield
+    finally:
+        await coding_worker.close()
+        await event_bus.close()
 
 
 # --- App Instance ---

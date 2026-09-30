@@ -1,3 +1,7 @@
+import asyncio
+
+from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
+
 from utils.logger import get_logger
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -15,16 +19,17 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 
-def _create_gpt_model() -> BaseChatModel:
+def _create_gpt_model(**client_options) -> BaseChatModel:
     return ChatOpenAI(
         model=config.CLOUD_CHAT_MODEL,
         api_key=config.OPENAI_API_KEY,
         streaming=True,
         use_responses_api=True,
+        **client_options,
     )
 
 
-def _create_cerebras_model() -> BaseChatModel:
+def _create_cerebras_model(**client_options) -> BaseChatModel:
     if not config.CEREBRAS_API_KEY:
         logger.warning("CEREBRAS_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
@@ -33,10 +38,11 @@ def _create_cerebras_model() -> BaseChatModel:
         base_url=CEREBRAS_BASE_URL,
         api_key=config.CEREBRAS_API_KEY,
         streaming=True,
+        **client_options,
     )
 
 
-def _create_deepseek_model() -> BaseChatModel:
+def _create_deepseek_model(**client_options) -> BaseChatModel:
     if not config.DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
@@ -45,10 +51,11 @@ def _create_deepseek_model() -> BaseChatModel:
         base_url=DEEPSEEK_BASE_URL,
         api_key=config.DEEPSEEK_API_KEY,
         streaming=True,
+        **client_options,
     )
 
 
-def _create_deepseek_pro_model() -> BaseChatModel:
+def _create_deepseek_pro_model(**client_options) -> BaseChatModel:
     if not config.DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
@@ -57,6 +64,7 @@ def _create_deepseek_pro_model() -> BaseChatModel:
         base_url=DEEPSEEK_BASE_URL,
         api_key=config.DEEPSEEK_API_KEY,
         streaming=True,
+        **client_options,
     )
 
 
@@ -78,7 +86,7 @@ def _create_gemini_model() -> BaseChatModel:
         return _create_gpt_model()
 
 
-def _create_mimo_model() -> BaseChatModel:
+def _create_mimo_model(**client_options) -> BaseChatModel:
     if not config.MIMO_API_KEY:
         logger.warning("MIMO_API_KEY not set, falling back to GPT")
         return _create_gpt_model()
@@ -89,10 +97,11 @@ def _create_mimo_model() -> BaseChatModel:
         streaming=True,
         stream_usage=True,
         extra_body={"thinking": {"type": "enabled"}},
+        **client_options,
     )
 
 
-def _create_mimo_summary_model() -> BaseChatModel:
+def _create_mimo_summary_model(**client_options) -> BaseChatModel:
     """Independent summary model; changing it does not change chat or memory."""
     if not config.MIMO_API_KEY:
         raise ValueError("MIMO_API_KEY is required for context summaries")
@@ -101,10 +110,11 @@ def _create_mimo_summary_model() -> BaseChatModel:
         base_url=MIMO_BASE_URL,
         api_key=config.MIMO_API_KEY,
         streaming=True,
+        **client_options,
     )
 
 
-def _create_mimo_title_model() -> BaseChatModel:
+def _create_mimo_title_model(**client_options) -> BaseChatModel:
     """Explicit lightweight model for thread titles."""
     if not config.MIMO_API_KEY:
         raise ValueError("MIMO_API_KEY is required for thread titles")
@@ -113,10 +123,11 @@ def _create_mimo_title_model() -> BaseChatModel:
         base_url=MIMO_BASE_URL,
         api_key=config.MIMO_API_KEY,
         streaming=True,
+        **client_options,
     )
 
 
-def _create_mimo_v25_model() -> BaseChatModel:
+def _create_mimo_v25_model(**client_options) -> BaseChatModel:
     """Legacy selector, retained for existing non-title integrations."""
     if not config.MIMO_API_KEY:
         logger.warning("MIMO_API_KEY not set, falling back to GPT")
@@ -124,6 +135,7 @@ def _create_mimo_v25_model() -> BaseChatModel:
     return ChatOpenAI(
         model="mimo-v2.6", base_url=MIMO_BASE_URL,
         api_key=config.MIMO_API_KEY, streaming=True,
+        **client_options,
     )
 
 
@@ -153,8 +165,8 @@ _factories = {
 }
 
 
-def get_strict_model(selection: str) -> BaseChatModel:
-    """Explicit provider for safety-critical compaction; never change provider on failure."""
+def get_strict_model(selection: str, *, isolated_http_clients: bool = False) -> BaseChatModel:
+    """Explicit provider; closable short-lived models must own their HTTP pools."""
     keys = {
         "gpt-cloud": "OPENAI_API_KEY", "cerebras": "CEREBRAS_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY", "deepseek-pro": "DEEPSEEK_API_KEY",
@@ -171,7 +183,24 @@ def get_strict_model(selection: str) -> BaseChatModel:
     if selection == "gemma-local":
         from langchain_ollama import ChatOllama
         return ChatOllama(model=config.LOCAL_MODEL_NAME, base_url=config.OLLAMA_BASE_URL)
-    model = _factories[selection]()
+    client_options = {}
+    if isolated_http_clients:
+        # New SDK instances otherwise still share LangChain's cached httpx
+        # transports. Closing one would poison main/summary/title models.
+        client_options = {"http_client": DefaultHttpxClient(),
+                          "http_async_client": DefaultAsyncHttpxClient()}
+    try:
+        model = _factories[selection](**client_options)
+    except BaseException:
+        if client_options:
+            client_options["http_client"].close()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(client_options["http_async_client"].aclose())
+            else:
+                loop.create_task(client_options["http_async_client"].aclose())
+        raise
     model.max_retries = 0
     # Factories construct SDK clients eagerly; changing only the LangChain
     # field does not change the SDK's already-initialized retry setting.

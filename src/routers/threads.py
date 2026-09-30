@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from core.config import config
 from routers.auth import get_current_user, security
+from services.coding_task_reference import coding_task_reference
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 logger = logging.getLogger("threads-router")
@@ -257,6 +258,16 @@ async def get_thread_messages(
                 })
 
         elif msg_type == "tool" and current_ai_msg and msg.get("status") != "error":
+            if msg.get("name") == "create_standalone_mini_app":
+                task = coding_task_reference(msg.get("content"))
+                paired = any(
+                    entry["name"] == msg["name"] and entry["id"] == msg.get("tool_call_id")
+                    for entry in current_ai_msg["tools"]
+                )
+                if task and paired:
+                    step_id = f"coding-{task['job_id']}"
+                    if not any(step["id"] == step_id for step in current_ai_msg["steps"]):
+                        current_ai_msg["steps"].append({"type": "coding_task", "id": step_id, "task": task})
             from services.generated_images import image_markdown
             image = image_markdown(msg.get("artifact"))
             if image:

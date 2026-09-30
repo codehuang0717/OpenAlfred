@@ -1,11 +1,13 @@
 """Agent tool for creating a personalized right-side panel."""
 
+import json
 from typing import Literal
 
 from langchain.tools import ToolRuntime, tool
 
 from services.user_apps import TodoTimelineOptions, create_todo_timeline
 from services.code_apps import CodeAppRequest, create_code_app
+from db.coding_jobs import get_job, stop_job
 from utils.auth_utils import require_runtime_user_id
 
 
@@ -42,10 +44,12 @@ async def create_standalone_mini_app(
 ) -> str:
     """Write a standalone mini-app for the user's right-side toolbox.
 
-    Use for calculators, timers, trackers, games, and other apps that do not
-    need private OpenAlfred data. Generated code has no todo, mail, memory,
-    account, network, or filesystem access. It needs user preview and publish.
-    For a timeline of real personal todos, use create_todo_timeline_panel.
+    Submit a background Coding subagent for calculators, dashboards, games,
+    or custom visualizations. The coder can read this user's todos, emails,
+    memory and knowledge through authenticated read-only tools when needed.
+    Generated apps use data snapshots, never live account access or credentials.
+    Returns a job ID immediately; do not poll in a loop or claim it is ready.
+    For the existing standard live todo timeline, use create_todo_timeline_panel.
     """
     user_id = require_runtime_user_id(runtime)
     configurable = runtime.config.get("configurable", {})
@@ -53,10 +57,29 @@ async def create_standalone_mini_app(
     if not isinstance(selection, str) or not selection:
         raise ValueError("未指定小程序生成模型；请先在聊天界面选择模型")
     request = CodeAppRequest(title=title.strip(), prompt=requirements.strip())
-    result = await create_code_app(user_id, request, selection)
-    if result["status"] == "failed":
-        return f"小程序生成失败：{result['error']}。没有发布任何代码。"
-    return f"「{request.title}」代码草稿已生成。请在右侧工具箱预览，确认后点击发布。"
+    result = await create_code_app(user_id, request, selection, run_config=runtime.config)
+    return json.dumps({"type": "coding_task", "title": request.title, **result,
+                       "message": "已提交后台编码；进度和最终报告会更新，完成后请预览并手动发布。"}, ensure_ascii=False)
 
 
-user_app_tools = [create_todo_timeline_panel, create_standalone_mini_app]
+@tool
+async def get_coding_task(runtime: ToolRuntime, job_id: str) -> str:
+    """Check an owned coding task when the user asks about progress; never poll in a loop."""
+    job = await get_job(require_runtime_user_id(runtime), job_id)
+    if job is None:
+        raise ValueError("编码任务不存在或不属于当前用户")
+    return json.dumps({key: job[key] for key in ("status", "stage", "report", "error", "app_id")}, ensure_ascii=False)
+
+
+@tool
+async def cancel_coding_task(runtime: ToolRuntime, job_id: str) -> str:
+    """Cancel an owned coding task only when the user requests cancellation."""
+    owner = require_runtime_user_id(runtime)
+    if await get_job(owner, job_id) is None:
+        raise ValueError("编码任务不存在或不属于当前用户")
+    if not await stop_job(owner, job_id):
+        raise ValueError("编码任务已经结束，不能取消")
+    return "已取消编码任务，没有发布代码。"
+
+
+user_app_tools = [create_todo_timeline_panel, create_standalone_mini_app, get_coding_task, cancel_coding_task]

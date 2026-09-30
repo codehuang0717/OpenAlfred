@@ -33,6 +33,14 @@ class Config:
     
     # Database Settings
     DB_PATH = PROJECT_ROOT / "todos.db"
+    CODING_CHECKPOINT_PATH = Path(os.getenv("CODING_CHECKPOINT_PATH", str(PROJECT_ROOT / "data" / "coding-checkpoints.sqlite")))
+    CODING_CONCURRENCY = int(os.getenv("CODING_CONCURRENCY", "2"))
+    CODING_MAX_MODEL_CALLS = int(os.getenv("CODING_MAX_MODEL_CALLS", "24"))
+    CODING_MAX_REPAIRS = int(os.getenv("CODING_MAX_REPAIRS", "3"))
+    CODING_INPUT_TOKENS = int(os.getenv("CODING_INPUT_TOKENS", "0"))
+    CODING_OUTPUT_TOKENS = int(os.getenv("CODING_OUTPUT_TOKENS", "16000"))
+    CODING_TOTAL_TOKENS = int(os.getenv("CODING_TOTAL_TOKENS", "0"))
+    CODING_TIMEOUT_SECONDS = float(os.getenv("CODING_TIMEOUT_SECONDS", "900"))
 
     # Multi-Provider API Keys
     CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")

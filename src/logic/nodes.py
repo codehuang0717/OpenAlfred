@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import time
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.types import StreamWriter
 
 from logic.schema import AgentState
@@ -18,6 +18,7 @@ from core.config import config as app_config
 from services.weather import format_weather_prompt_context, get_weather_summary
 from utils.auth_utils import require_thread_id, require_user_id
 from services.user_time import get_user_timezone, save_user_timezone, MissingTimezoneError
+from services.coding_task_reference import coding_task_reference
 
 logger = get_logger("graph-nodes")
 ctx_manager = ContextManager()
@@ -156,8 +157,21 @@ async def agent_node(state: AgentState, config, writer: StreamWriter):
         response = await llm.ainvoke(prompt_messages, config, **output_limit_kwargs(model_selection, ctx_manager.output_reserve))
     except Exception as e:
         friendly = _map_llm_error(e)
-        logger.error(f"[AgentNode] LLM error (model={model_selection}): {friendly}")
-        return failed("model_request_failed", f"❌ 模型调用失败：{friendly}。未自动重试或切换模型。")
+        # Preserve the transport exception chain, not just SDK's generic wrapper.
+        logger.exception("[AgentNode] LLM error (model=%s, thread=%s): %s",
+                         model_selection, conf.get("thread_id"), friendly)
+        submitted = False
+        for message in reversed(state.messages):
+            if isinstance(message, HumanMessage):
+                break
+            if (isinstance(message, ToolMessage) and message.status != "error"
+                    and message.name == "create_standalone_mini_app"
+                    and coding_task_reference(message.content)):
+                submitted = True
+                break
+        notice = ("\n\n这是聊天后续回复失败，不代表后台编码失败。已提交的编码任务独立运行，"
+                  "请查看任务卡中的实际进度或结果。") if submitted else ""
+        return failed("model_request_failed", f"❌ 模型调用失败：{friendly}。未自动重试或切换模型。{notice}")
     usage = model_usage_metrics(response, model_selection, round((time.monotonic() - started) * 1000))
     outcome = classify_response(response, set(tool_names))
     usage["outcome"] = outcome.as_dict()
