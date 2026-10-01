@@ -7,7 +7,6 @@ import json
 # Local imports
 from services.email import get_recent_emails as _get_recent_emails
 from services.email import read_email as _read_email
-from services.email import draft_and_send_email as _draft_and_send_email
 from services.email import EmailServiceException
 from tools.todos import _get_user_id
 
@@ -173,8 +172,49 @@ async def get_email_accounts(runtime: ToolRuntime) -> Command:
         )
 
 
+@tool
+async def create_email_draft(runtime: ToolRuntime, account_id: str, to_address: str, subject: str, body: str) -> str:
+    """Save an editable email draft, never send. Use a real account and recipient supplied by the user."""
+    from db.email_drafts import create_draft
+    from schemas.email_workflow import DraftFields
+    from services.email_worker import notify
+    from utils.auth_utils import require_runtime_user_id
+    owner = require_runtime_user_id(runtime)
+    fields = DraftFields(account_id=account_id, to_address=to_address, subject=subject, body=body)
+    draft = await create_draft(owner, fields.model_dump(), f"tool:{runtime.tool_call_id}")
+    await notify(owner, draft["id"])
+    return json.dumps({"type": "email_draft", "draft_id": draft["id"], "subject": draft["subject"]}, ensure_ascii=False)
+
+
+@tool
+async def get_email_draft(runtime: ToolRuntime, draft_id: str) -> str:
+    """Read the latest owned email draft and revision before proposing an edit."""
+    from db.email_drafts import get_draft
+    from utils.auth_utils import require_runtime_user_id
+    draft = await get_draft(require_runtime_user_id(runtime), draft_id)
+    return json.dumps({key: draft[key] for key in ("id", "account_id", "to_address", "subject", "body", "revision", "status")}, ensure_ascii=False)
+
+
+@tool
+async def update_email_draft(runtime: ToolRuntime, draft_id: str, revision: int, account_id: str,
+                             to_address: str, subject: str, body: str) -> str:
+    """Propose changes to the exact draft revision. Preserve the original until the user adopts the proposal."""
+    from db.email_drafts import create_draft
+    from schemas.email_workflow import DraftFields
+    from services.email_worker import notify
+    from utils.auth_utils import require_runtime_user_id
+    owner = require_runtime_user_id(runtime)
+    fields = DraftFields(account_id=account_id, to_address=to_address, subject=subject, body=body)
+    draft = await create_draft(owner, fields.model_dump(), f"tool:{runtime.tool_call_id}", proposal_for=draft_id, base_revision=revision)
+    await notify(owner, draft["id"])
+    return json.dumps({"type": "email_draft", "draft_id": draft["id"], "subject": draft["subject"]}, ensure_ascii=False)
+
+
 email_tools = [
     get_recent_emails,
     read_email,
     get_email_accounts,
+    create_email_draft,
+    get_email_draft,
+    update_email_draft,
 ]

@@ -356,6 +356,11 @@ async def init_db():
         await _reject_invalid_user_ids(db, "user_app_revisions")
         await _reject_invalid_user_ids(db, "user_app_jobs")
 
+        from db.email_drafts import init_schema as init_mail_schema
+        await init_mail_schema(db)
+        await _reject_invalid_user_ids(db, "email_drafts")
+        await _reject_invalid_user_ids(db, "email_send_jobs")
+
         await db.commit()
 
 

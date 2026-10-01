@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from core.config import config
 from routers.auth import get_current_user, security
 from services.coding_task_reference import coding_task_reference
+from services.email_draft_reference import email_draft_reference
 
 from schemas.responses import (
     ChatMessageResponse,
@@ -268,6 +269,16 @@ async def get_thread_messages(
                 })
 
         elif msg_type == "tool" and current_ai_msg and msg.get("status") != "error":
+            if msg.get("name") in {"create_email_draft", "update_email_draft"}:
+                draft = email_draft_reference(msg.get("content"))
+                paired = any(
+                    entry["name"] == msg["name"] and entry["id"] == msg.get("tool_call_id")
+                    for entry in current_ai_msg["tools"]
+                )
+                if draft and paired:
+                    step_id = f"mail-{draft['draft_id']}"
+                    if not any(step["id"] == step_id for step in current_ai_msg["steps"]):
+                        current_ai_msg["steps"].append({"type": "email_draft", "id": step_id, "draft": draft})
             if msg.get("name") == "create_standalone_mini_app":
                 task = coding_task_reference(msg.get("content"))
                 paired = any(

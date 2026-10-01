@@ -39,6 +39,7 @@ class EventType(str, Enum):
     # Generated user panels
     USER_APP_UPDATED = "user_app.updated"
     USER_APP_DELETED = "user_app.deleted"
+    EMAIL_UPDATED = "email.updated"
 
     # Supervisor events
     SUPERVISOR_STATE_CHANGED = "supervisor.state_changed"

@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from core.database import init_db
 from core.event_bus import event_bus
 from services.coding_worker import CodingWorker
+from services.email_worker import EmailWorker
+from routers import email_workflow
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag, memory, user_apps
 from routers import generated_images
 
@@ -32,14 +34,18 @@ async def lifespan(app: FastAPI):
     await init_db()
     await event_bus.connect()
     coding_worker = CodingWorker()
+    email_worker = EmailWorker()
     try:
         await coding_worker.start()
         app.state.coding_worker = coding_worker
+        await email_worker.start()
+        app.state.email_worker = email_worker
         logger.info("Database initialized. EventBus connected.")
         from rag.embedding import get_embedding_model
         threading.Thread(target=get_embedding_model, daemon=True, name="embed-warmup").start()
         yield
     finally:
+        await email_worker.close()
         await coding_worker.close()
         await event_bus.close()
 
@@ -77,6 +83,7 @@ app.include_router(reminders.router)
 app.include_router(threads.router)
 app.include_router(calls.router)
 app.include_router(email.router)
+app.include_router(email_workflow.router)
 app.include_router(settings.router)
 app.include_router(multimodal.router)
 app.include_router(events.router)

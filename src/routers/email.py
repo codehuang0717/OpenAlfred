@@ -66,24 +66,10 @@ async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get
         logger.error(f"Error fetching email {email_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/emails/send", responses=json_response(StatusResponse, 200))
+@router.post("/emails/send", deprecated=True, status_code=410)
 async def send_email_api(req: EmailSendRequest, user: dict = Depends(get_current_user)):
-    """Send an email."""
-    from services.email import draft_and_send_email, EmailServiceException
-    try:
-        await draft_and_send_email(
-            user_id=user["id"],
-            to=req.to_address,
-            subject=req.subject,
-            body=req.body,
-            account_id=req.account_id
-        )
-        return {"status": "success"}
-    except EmailServiceException as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error sending email: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+    """Old clients must import a persistent draft before confirming its version."""
+    raise HTTPException(410, "请更新页面，通过已保存草稿确认发送；旧版直接发送接口已停用")
 
 @router.get("/email/config", responses=json_response(list[EmailConfigResponse], 200))
 async def get_email_configs_api(user: dict = Depends(get_current_user)):

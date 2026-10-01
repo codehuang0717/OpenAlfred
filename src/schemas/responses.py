@@ -130,7 +130,19 @@ class CodingTaskStep(BaseModel):
     task: CodingTaskReference
 
 
-ChatStep = Annotated[TextStep | ToolsStep | CodingTaskStep, Field(discriminator="type")]
+class EmailDraftReference(BaseModel):
+    type: Literal["email_draft"]
+    draft_id: str
+    subject: str
+
+
+class EmailDraftStep(BaseModel):
+    type: Literal["email_draft"]
+    id: str
+    draft: EmailDraftReference
+
+
+ChatStep = Annotated[TextStep | ToolsStep | CodingTaskStep | EmailDraftStep, Field(discriminator="type")]
 
 
 class ChatMessageResponse(BaseModel):

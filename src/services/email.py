@@ -1,8 +1,7 @@
 import email
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
-from email.message import EmailMessage
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 import aioimaplib
@@ -198,22 +197,23 @@ async def verify_account(imap_server, imap_port, smtp_server, smtp_port, email_a
     except Exception as e:
         raise EmailServiceException(f"IMAP Verification failed: {str(e)}")
 
-    # Test SMTP
+    # Match delivery: TLS on 465, explicit STARTTLS on other configured ports.
+    # Disable opportunistic STARTTLS so the library cannot upgrade twice.
+    implicit_tls = smtp_port == 465
+    smtp = aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, use_tls=implicit_tls,
+                         start_tls=False, timeout=30)
     try:
-        smtp = aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, use_tls=True)
         await smtp.connect()
-        await smtp.login(email_address, password)
-        await smtp.quit()
-    except Exception as e:
-        # Retry with STARTTLS if implicit SSL fails (common for 587 port)
-        try:
-            smtp = aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, use_tls=False)
-            await smtp.connect()
+        if not implicit_tls:
             await smtp.starttls()
-            await smtp.login(email_address, password)
-            await smtp.quit()
-        except Exception as e2:
-            raise EmailServiceException(f"SMTP Verification failed: {str(e2)}") from e
+        await smtp.login(email_address, password)
+        with suppress(Exception):
+            await smtp.quit(timeout=10)
+    except Exception as e:
+        raise EmailServiceException(f"SMTP Verification failed: {str(e)}") from e
+    finally:
+        with suppress(Exception):
+            smtp.close()
 
     return True
 
@@ -362,32 +362,3 @@ async def read_email(user_id: str, email_id: str, account_id: str = None) -> dic
         raise
     except Exception as e:
         raise EmailServiceException(f"Error reading email: {str(e)}") from e
-
-async def draft_and_send_email(user_id: str, to: str, subject: str, body: str, account_id: str = None):
-    """Sends an email using the user's SMTP credentials."""
-    creds = await _get_credentials(user_id, account_id)
-    
-    msg = EmailMessage()
-    msg.set_content(body)
-    msg['Subject'] = subject
-    msg['From'] = creds["email_address"]
-    msg['To'] = to
-    
-    try:
-        if creds["smtp_port"] == 465:
-            # implicit TLS
-            smtp = aiosmtplib.SMTP(hostname=creds["smtp_server"], port=creds["smtp_port"], use_tls=True)
-            await smtp.connect()
-            await smtp.login(creds["email_address"], creds["password"])
-            await smtp.send_message(msg)
-            await smtp.quit()
-        else:
-            # explicit TLS
-            smtp = aiosmtplib.SMTP(hostname=creds["smtp_server"], port=creds["smtp_port"], use_tls=False)
-            await smtp.connect()
-            await smtp.starttls()
-            await smtp.login(creds["email_address"], creds["password"])
-            await smtp.send_message(msg)
-            await smtp.quit()
-    except Exception as e:
-        raise EmailServiceException(f"Failed to send email: {str(e)}")

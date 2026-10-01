@@ -23,10 +23,10 @@ async def event_stream(user: dict = Depends(get_current_user)):
         try:
             # Subscribe to all relevant patterns
             # Note: EventBus.subscribe handles the CHANNEL_PREFIX
-            async for event in event_bus.subscribe("todo.*", "reminder.*", "supervisor.*", "user_app.*"):
+            async for event in event_bus.subscribe("todo.*", "reminder.*", "supervisor.*", "user_app.*", "email.*"):
                 # Filter by user_id if present in event data (optional but good for multi-user)
                 event_user_id = event.get("data", {}).get("user_id")
-                if event.get("type", "").startswith("user_app.") and not event_user_id:
+                if event.get("type", "").startswith(("user_app.", "email.")) and not event_user_id:
                     continue
                 if event_user_id and event_user_id != user["id"]:
                     continue
