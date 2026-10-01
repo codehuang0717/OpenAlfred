@@ -10,6 +10,12 @@ from core.database import (
 )
 from routers.auth import get_current_user
 
+from schemas.responses import (
+    StatusResponse,
+    TodoResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
 class TodoUpdateRequest(BaseModel):
@@ -29,14 +35,14 @@ class TodoUpdateRequest(BaseModel):
         return localize_to_utc(value)
 
 
-@router.get("")
+@router.get("", responses=json_response(list[TodoResponse], 200))
 async def get_todos(user: dict = Depends(get_current_user)):
     """Get all todos for the current user."""
     todos = await get_all_todos(user_id=user["id"])
     return todos
 
 
-@router.patch("/{todo_id}")
+@router.patch("/{todo_id}", responses=json_response(StatusResponse, 200))
 async def update_todo_api(
     todo_id: str,
     req: TodoUpdateRequest,
@@ -59,7 +65,7 @@ async def update_todo_api(
     return {"status": "updated"}
 
 
-@router.delete("/{todo_id}")
+@router.delete("/{todo_id}", responses=json_response(StatusResponse, 200))
 async def delete_todo_api(
     todo_id: str,
     user: dict = Depends(get_current_user),

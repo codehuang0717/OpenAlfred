@@ -9,6 +9,12 @@ from core.database import (
 )
 from routers.auth import get_current_user
 
+from schemas.responses import (
+    ReminderResponse,
+    StatusResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
 class ReminderUpdateRequest(BaseModel):
@@ -17,14 +23,14 @@ class ReminderUpdateRequest(BaseModel):
     body: Optional[str] = None
 
 
-@router.get("")
+@router.get("", responses=json_response(list[ReminderResponse], 200))
 async def get_reminders(user: dict = Depends(get_current_user)):
     """Get all reminders for the current user."""
     reminders = await get_all_reminders(user_id=user["id"])
     return reminders
 
 
-@router.patch("/{reminder_id}")
+@router.patch("/{reminder_id}", responses=json_response(StatusResponse, 200))
 async def update_reminder_api(
     reminder_id: str,
     req: ReminderUpdateRequest,
@@ -43,7 +49,7 @@ async def update_reminder_api(
     return {"status": "updated"}
 
 
-@router.delete("/{reminder_id}")
+@router.delete("/{reminder_id}", responses=json_response(StatusResponse, 200))
 async def delete_reminder_api(
     reminder_id: str,
     user: dict = Depends(get_current_user),

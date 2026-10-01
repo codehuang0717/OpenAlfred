@@ -9,6 +9,12 @@ from pydantic import BaseModel
 from routers.auth import get_current_user
 from logic.memory_manager import memory_manager, ALL_L1_FILES
 
+from schemas.responses import (
+    MemoryFile,
+    MemoryUpdateResponse,
+    json_response,
+)
+
 logger = logging.getLogger("memory-router")
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -32,7 +38,7 @@ class UpdateMemoryRequest(BaseModel):
     content: str
 
 
-@router.get("/memory")
+@router.get("/memory", responses=json_response(dict[str, MemoryFile], 200))
 async def get_memories(user: dict = Depends(get_current_user)):
     """Return all L1 memory files for the authenticated user."""
     user_id = user["id"]
@@ -52,7 +58,7 @@ async def get_memories(user: dict = Depends(get_current_user)):
     return result
 
 
-@router.put("/memory/{category}")
+@router.put("/memory/{category}", responses=json_response(MemoryUpdateResponse, 200))
 async def update_memory(category: str, req: UpdateMemoryRequest, user: dict = Depends(get_current_user)):
     """Overwrite a specific L1 memory file for the authenticated user."""
     if category not in CATEGORY_MAP:

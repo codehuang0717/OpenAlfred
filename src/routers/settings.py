@@ -19,6 +19,27 @@ from services.weather import (
     save_weather_location,
 )
 
+from schemas.responses import (
+    AgentAvatarResponse,
+    AgentConfigResponse,
+    ModelResponse,
+    ModelSelectionResponse,
+    ModelSelectionUpdateResponse,
+    NotifyConfigResponse,
+    NotifyTestResponse,
+    NotifyUpdateResponse,
+    OnboardingResponse,
+    OnboardingUpdateResponse,
+    OnlineResponse,
+    SavedWeatherLocationResponse,
+    StatusResponse,
+    SupervisorResponse,
+    TimezoneResponse,
+    WeatherLocationUpdateResponse,
+    WeatherResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api", tags=["settings"])
 
 
@@ -26,7 +47,7 @@ class UserTimezoneRequest(BaseModel):
     timezone: str
 
 
-@router.put("/settings/timezone")
+@router.put("/settings/timezone", responses=json_response(TimezoneResponse, 200))
 async def update_user_timezone(req: UserTimezoneRequest, user: dict = Depends(get_current_user)):
     from services.user_time import save_user_timezone
     try:
@@ -37,7 +58,7 @@ async def update_user_timezone(req: UserTimezoneRequest, user: dict = Depends(ge
 AGENT_AVATAR_DIR = Path(__file__).parent.parent / "uploads" / "agents"
 
 
-@router.get("/agent/config")
+@router.get("/agent/config", responses=json_response(AgentConfigResponse, 200))
 async def get_agent_config(user: dict = Depends(get_current_user)):
     avatar_path = AGENT_AVATAR_DIR / f"{user['id']}.jpg"
     return {
@@ -45,7 +66,7 @@ async def get_agent_config(user: dict = Depends(get_current_user)):
     }
 
 
-@router.post("/agent/avatar")
+@router.post("/agent/avatar", responses=json_response(AgentAvatarResponse, 200))
 async def upload_agent_avatar(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
@@ -79,7 +100,7 @@ class SupervisorConfigRequest(BaseModel):
     recording_enabled: bool
     smart_supervision_enabled: bool
 
-@router.get("/models")
+@router.get("/models", responses=json_response(list[ModelResponse], 200))
 async def get_models():
     """Get list of available LLM models across all providers."""
     from core.config import config
@@ -153,19 +174,19 @@ async def get_models():
 
     return models
 
-@router.get("/model/selection")
+@router.get("/model/selection", responses=json_response(ModelSelectionResponse, 200))
 async def get_model_selection_api(user: dict = Depends(get_current_user)):
     """Get the current globally selected LLM model."""
     selection = await get_setting("model_selection", "gpt-cloud")
     return {"model_selection": selection}
 
-@router.post("/model/selection")
+@router.post("/model/selection", responses=json_response(ModelSelectionUpdateResponse, 200))
 async def set_model_selection_api(data: ModelSelectionRequest, user: dict = Depends(get_current_user)):
     """Update the globally selected LLM model."""
     await set_setting("model_selection", data.model_selection)
     return {"status": "updated", "model_selection": data.model_selection}
 
-@router.get("/ollama/status")
+@router.get("/ollama/status", responses=json_response(OnlineResponse, 200))
 async def check_ollama_status():
     """Check if local Ollama server is reachable."""
     try:
@@ -175,7 +196,7 @@ async def check_ollama_status():
     except Exception:
         return {"online": False}
 
-@router.get("/supervisor/config")
+@router.get("/supervisor/config", responses=json_response(SupervisorResponse, 200))
 async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
     """Get the current supervisor enabled status."""
     try:
@@ -189,7 +210,7 @@ async def get_supervisor_config_api(user: dict = Depends(get_current_user)):
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-@router.post("/supervisor/config")
+@router.post("/supervisor/config", responses=json_response(SupervisorResponse, 200))
 async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = Depends(get_current_user)):
     """Set the supervisor enabled status."""
     try:
@@ -201,7 +222,7 @@ async def set_supervisor_config_api(data: SupervisorConfigRequest, user: dict = 
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/supervisor/bind")
+@router.post("/supervisor/bind", responses=json_response(SupervisorResponse, 200))
 async def bind_supervisor_account(request: Request, user: dict = Depends(get_current_user)):
     """Bind only the authenticated identity, with explicit physical desktop consent."""
     try:
@@ -228,28 +249,28 @@ class WeatherLocationRequest(BaseModel):
     source: str = "browser"
 
 
-@router.get("/notify/config")
+@router.get("/notify/config", responses=json_response(NotifyConfigResponse, 200))
 async def get_notify_config(user: dict = Depends(get_current_user)):
     """Get the current user's push notification configuration."""
     bark_url = await get_user_bark_url(user["id"])
     return {"bark_url": bark_url}
 
 
-@router.post("/notify/config")
+@router.post("/notify/config", responses=json_response(NotifyUpdateResponse, 200))
 async def set_notify_config(data: NotifyConfigRequest, user: dict = Depends(get_current_user)):
     """Update the current user's push notification configuration."""
     await set_user_bark_url(user["id"], data.bark_url)
     return {"status": "updated", "bark_url": data.bark_url}
 
 
-@router.delete("/notify/config")
+@router.delete("/notify/config", responses=json_response(StatusResponse, 200))
 async def unbind_notify_config(user: dict = Depends(get_current_user)):
     """Unbind (clear) the current user's Bark URL."""
     await set_user_bark_url(user["id"], "")
     return {"status": "unbound"}
 
 
-@router.post("/notify/test")
+@router.post("/notify/test", responses=json_response(NotifyTestResponse, 200))
 async def test_notify(user: dict = Depends(get_current_user)):
     """Send a test notification to the current user's Bark device."""
     from services.notification import notification_service
@@ -271,13 +292,13 @@ async def test_notify(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=502, detail="Bark 服务不可达，请检查 URL 是否正确")
 
 
-@router.get("/weather/location")
+@router.get("/weather/location", responses=json_response(SavedWeatherLocationResponse, 200))
 async def get_weather_location(user: dict = Depends(get_current_user)):
     """Get the current user's default weather location."""
     return {"location": await get_saved_weather_location(user["id"])}
 
 
-@router.post("/weather/location")
+@router.post("/weather/location", responses=json_response(WeatherLocationUpdateResponse, 200))
 async def set_weather_location(data: WeatherLocationRequest, user: dict = Depends(get_current_user)):
     """Save the current user's default weather location."""
     if not -90 <= data.latitude <= 90:
@@ -296,14 +317,14 @@ async def set_weather_location(data: WeatherLocationRequest, user: dict = Depend
     return {"status": "updated", "location": saved}
 
 
-@router.delete("/weather/location")
+@router.delete("/weather/location", responses=json_response(StatusResponse, 200))
 async def delete_weather_location(user: dict = Depends(get_current_user)):
     """Clear the current user's default weather location."""
     await clear_weather_location(user["id"])
     return {"status": "deleted"}
 
 
-@router.get("/weather/current")
+@router.get("/weather/current", responses=json_response(WeatherResponse, 200))
 async def get_current_weather(user: dict = Depends(get_current_user)):
     """Get the current user's saved-location weather summary."""
     try:
@@ -320,14 +341,14 @@ class OnboardingRequest(BaseModel):
     seen: bool = True
 
 
-@router.get("/onboarding")
+@router.get("/onboarding", responses=json_response(OnboardingResponse, 200))
 async def get_onboarding_status(user: dict = Depends(get_current_user)):
     """Check if the current user has seen the onboarding tutorial prompt."""
     seen = await get_onboarding_seen(user["id"])
     return {"seen": seen}
 
 
-@router.post("/onboarding")
+@router.post("/onboarding", responses=json_response(OnboardingUpdateResponse, 200))
 async def set_onboarding_status(data: OnboardingRequest, user: dict = Depends(get_current_user)):
     """Mark the current user as having seen/dismissed the onboarding tutorial prompt."""
     await set_onboarding_seen(user["id"], data.seen)

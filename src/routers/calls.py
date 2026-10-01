@@ -6,9 +6,14 @@ from core.config import config
 from routers.auth import get_current_user, security
 from routers.threads import _lg_headers
 
+from schemas.responses import (
+    CallThreadResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 
-@router.get("/threads")
+@router.get("/threads", responses=json_response(list[CallThreadResponse], 200))
 async def list_calls(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     user: dict = Depends(get_current_user),

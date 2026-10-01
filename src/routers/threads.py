@@ -9,6 +9,16 @@ from core.config import config
 from routers.auth import get_current_user, security
 from services.coding_task_reference import coding_task_reference
 
+from schemas.responses import (
+    ChatMessageResponse,
+    CreatedThread,
+    StatusResponse,
+    ThreadRenameResponse,
+    ThreadResponse,
+    TitleResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 logger = logging.getLogger("threads-router")
 
@@ -22,7 +32,7 @@ def _lg_headers(token: str) -> dict:
         "Content-Type": "application/json",
     }
 
-@router.get("")
+@router.get("", responses=json_response(list[ThreadResponse], 200))
 async def list_threads(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     user: dict = Depends(get_current_user),
@@ -60,7 +70,7 @@ async def list_threads(
     result.sort(key=lambda x: x["updated_at"], reverse=True)
     return result
 
-@router.post("")
+@router.post("", responses=json_response(CreatedThread, 200))
 async def create_thread(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     user: dict = Depends(get_current_user),
@@ -89,7 +99,7 @@ async def create_thread(
         "created_at": thread.get("created_at", ""),
     }
 
-@router.patch("/{thread_id}")
+@router.patch("/{thread_id}", responses=json_response(ThreadRenameResponse, 200))
 async def rename_thread(
     thread_id: str,
     req: ThreadRenameRequest,
@@ -117,7 +127,7 @@ async def rename_thread(
 
     return {"status": "updated", "title": req.title}
 
-@router.delete("/{thread_id}")
+@router.delete("/{thread_id}", responses=json_response(StatusResponse, 200))
 async def delete_thread(
     thread_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -138,7 +148,7 @@ async def delete_thread(
 
     return {"status": "deleted"}
 
-@router.get("/{thread_id}/messages")
+@router.get("/{thread_id}/messages", responses=json_response(list[ChatMessageResponse], 200))
 async def get_thread_messages(
     thread_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -280,7 +290,7 @@ async def get_thread_messages(
 
     return result
 
-@router.post("/{thread_id}/title")
+@router.post("/{thread_id}/title", responses=json_response(TitleResponse, 200))
 async def generate_thread_title(
     thread_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security),

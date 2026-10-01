@@ -28,6 +28,16 @@ from utils.auth_utils import (
     require_explicit_user_id,
 )
 
+from schemas.responses import (
+    AuthResponse,
+    AvatarResponse,
+    ProfileResponse,
+    ProfileUpdateResponse,
+    StatusResponse,
+    TokenResponse,
+    json_response,
+)
+
 logger = logging.getLogger("auth-router")
 
 
@@ -199,7 +209,7 @@ async def get_current_user(
 
 # --- Endpoints ---
 
-@router.post("/register")
+@router.post("/register", responses=json_response(AuthResponse, 200))
 async def register(req: RegisterRequest):
     """Register a new user account. Auto-assigns SIP extension and password."""
     logger.info(f"[register] username={req.username} display_name={req.display_name}")
@@ -262,7 +272,7 @@ async def register(req: RegisterRequest):
     }
 
 
-@router.post("/login")
+@router.post("/login", responses=json_response(AuthResponse, 200))
 async def login(req: LoginRequest):
     """Authenticate and receive a JWT token."""
     logger.info(f"[login] username={req.username}")
@@ -307,7 +317,7 @@ def _avatar_url(user_id: str) -> str:
     return f"/static/avatars/{user_id}.jpg" if _avatar_path(user_id).exists() else ""
 
 
-@router.get("/me")
+@router.get("/me", responses=json_response(ProfileResponse, 200))
 async def get_me(user: dict = Depends(get_current_user)):
     """Retrieve the profile of the currently authenticated user."""
     logger.debug(f"[me] user={user.get('username')} id={user.get('id')}")
@@ -324,7 +334,7 @@ async def get_me(user: dict = Depends(get_current_user)):
 class UpdateMeRequest(BaseModel):
     display_name: str
 
-@router.put("/me")
+@router.put("/me", responses=json_response(ProfileUpdateResponse, 200))
 async def update_me(req: UpdateMeRequest, user: dict = Depends(get_current_user)):
     """Update the current user's profile (display_name)."""
     if not req.display_name or len(req.display_name.strip()) == 0:
@@ -334,7 +344,7 @@ async def update_me(req: UpdateMeRequest, user: dict = Depends(get_current_user)
     return {"status": "updated", "display_name": req.display_name.strip()}
 
 
-@router.post("/me/avatar")
+@router.post("/me/avatar", responses=json_response(AvatarResponse, 200))
 async def upload_avatar(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Upload and crop/resize a new avatar image (max 5MB)."""
     content = await file.read()
@@ -369,7 +379,7 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
-@router.put("/me/password")
+@router.put("/me/password", responses=json_response(StatusResponse, 200))
 async def change_password(req: ChangePasswordRequest, user: dict = Depends(get_current_user)):
     """Change the current user's password."""
     if not req.old_password or not req.new_password:
@@ -391,7 +401,7 @@ async def change_password(req: ChangePasswordRequest, user: dict = Depends(get_c
     return {"status": "updated"}
 
 
-@router.post("/refresh")
+@router.post("/refresh", responses=json_response(TokenResponse, 200))
 async def refresh_token(user: dict = Depends(get_current_user)):
     """Issue a fresh JWT token for the authenticated user."""
     token = create_jwt_token(user["id"], user["username"])

@@ -12,6 +12,15 @@ from core.database import (
 from services.email import verify_account, EmailServiceException
 from routers.auth import get_current_user
 
+from schemas.responses import (
+    EmailConfigResponse,
+    EmailConfigUpdateResponse,
+    EmailContentResponse,
+    EmailResponse,
+    StatusResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api", tags=["email"])
 logger = logging.getLogger("email-router")
 
@@ -31,7 +40,7 @@ class EmailSendRequest(BaseModel):
     subject: str
     body: str
 
-@router.get("/emails/recent")
+@router.get("/emails/recent", responses=json_response(list[EmailResponse], 200))
 async def get_recent_emails_api(user: dict = Depends(get_current_user)):
     """Get recent emails from configured accounts."""
     from services.email import get_recent_emails, EmailServiceException
@@ -44,7 +53,7 @@ async def get_recent_emails_api(user: dict = Depends(get_current_user)):
         logger.error(f"Error fetching recent emails: {e}")
         return []
 
-@router.get("/emails/{email_id}")
+@router.get("/emails/{email_id}", responses=json_response(EmailContentResponse, 200))
 async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get_current_user)):
     """Get a specific email's content."""
     from services.email import read_email, EmailServiceException
@@ -57,7 +66,7 @@ async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get
         logger.error(f"Error fetching email {email_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/emails/send")
+@router.post("/emails/send", responses=json_response(StatusResponse, 200))
 async def send_email_api(req: EmailSendRequest, user: dict = Depends(get_current_user)):
     """Send an email."""
     from services.email import draft_and_send_email, EmailServiceException
@@ -76,7 +85,7 @@ async def send_email_api(req: EmailSendRequest, user: dict = Depends(get_current
         logger.error(f"Error sending email: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/email/config")
+@router.get("/email/config", responses=json_response(list[EmailConfigResponse], 200))
 async def get_email_configs_api(user: dict = Depends(get_current_user)):
     """Get the current user's email configurations."""
     creds = await get_email_credentials(user["id"])
@@ -85,7 +94,7 @@ async def get_email_configs_api(user: dict = Depends(get_current_user)):
             del cred["encrypted_password"]
     return creds
 
-@router.post("/email/config")
+@router.post("/email/config", responses=json_response(EmailConfigUpdateResponse, 200))
 async def set_email_config_api(req: EmailConfigRequest, user: dict = Depends(get_current_user)):
     """Add or update an email configuration after verifying."""
     from utils.crypto import encrypt_password
@@ -119,7 +128,7 @@ async def set_email_config_api(req: EmailConfigRequest, user: dict = Depends(get
     
     return {"status": "success", "account_id": account_id}
 
-@router.delete("/email/config/{account_id}")
+@router.delete("/email/config/{account_id}", responses=json_response(StatusResponse, 200))
 async def delete_email_config_api(account_id: str, user: dict = Depends(get_current_user)):
     """Delete an email configuration."""
     await delete_email_credentials(account_id=account_id, user_id=user["id"])

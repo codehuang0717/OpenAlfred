@@ -4,10 +4,15 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from routers.auth import get_current_user
 from core.config import config
 
+from schemas.responses import (
+    TextResponse,
+    json_response,
+)
+
 router = APIRouter(prefix="/api", tags=["multimodal"])
 logger = logging.getLogger("multimodal-router")
 
-@router.post("/transcribe")
+@router.post("/transcribe", responses=json_response(TextResponse, 200))
 async def transcribe_audio_api(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Transcribe audio using local SenseVoice API."""
     try:
@@ -26,7 +31,7 @@ async def transcribe_audio_api(file: UploadFile = File(...), user: dict = Depend
         logger.error(f"Error transcribing audio: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/parse-file")
+@router.post("/parse-file", responses=json_response(TextResponse, 200))
 async def parse_file_api(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Extract text from uploaded files (PDF, TXT, etc.)."""
     try:

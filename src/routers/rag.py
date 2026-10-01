@@ -16,6 +16,16 @@ from rag.embedding import embedding_ready, get_embedding_model
 from rag.store import delete_document as delete_document_full
 from rag.image_handler import IMAGES_DIR
 
+from schemas.responses import (
+    IngestAcceptedResponse,
+    IngestTaskResponse,
+    KnowledgeDocumentResponse,
+    KnowledgeSearchResponse,
+    SelectedFileResponse,
+    StatusResponse,
+    json_response,
+)
+
 logger = logging.getLogger("rag-router")
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
@@ -127,12 +137,12 @@ class IngestTextRequest(BaseModel):
 
 # ─── Document CRUD ──────────────────────────────────────────
 
-@router.get("/documents")
+@router.get("/documents", responses=json_response(list[KnowledgeDocumentResponse], 200))
 async def list_documents(user: dict = Depends(get_current_user)):
     return await get_documents(user["id"])
 
 
-@router.get("/documents/{doc_id}")
+@router.get("/documents/{doc_id}", responses=json_response(KnowledgeDocumentResponse, 200))
 async def get_document(doc_id: str, user: dict = Depends(get_current_user)):
     doc = await get_document_by_id(doc_id, user_id=user["id"])
     if not doc:
@@ -140,7 +150,7 @@ async def get_document(doc_id: str, user: dict = Depends(get_current_user)):
     return doc
 
 
-@router.delete("/documents/{doc_id}")
+@router.delete("/documents/{doc_id}", responses=json_response(StatusResponse, 200))
 async def remove_document(doc_id: str, user: dict = Depends(get_current_user)):
     doc = await get_document_by_id(doc_id, user_id=user["id"])
     if not doc:
@@ -151,7 +161,7 @@ async def remove_document(doc_id: str, user: dict = Depends(get_current_user)):
 
 # ─── Search ─────────────────────────────────────────────────
 
-@router.post("/search")
+@router.post("/search", responses=json_response(KnowledgeSearchResponse, 200))
 async def search_docs(req: SearchRequest, user: dict = Depends(get_current_user)):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query is empty")
@@ -167,7 +177,7 @@ async def search_docs(req: SearchRequest, user: dict = Depends(get_current_user)
 
 # ─── Task Status API ────────────────────────────────────────
 
-@router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}", responses=json_response(IngestTaskResponse, 200))
 async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
     task = ingestion_tasks.get(task_id)
     if not task or task.get("user_id") != user["id"]:
@@ -177,7 +187,7 @@ async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
 
 # ─── Upload ─────────────────────────────────────────────────
 
-@router.post("/upload", status_code=202)
+@router.post("/upload", status_code=202, responses=json_response(IngestAcceptedResponse, 202))
 async def upload_file(
     background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
@@ -232,7 +242,7 @@ class IngestPathRequest(BaseModel):
     title: str = ""
 
 
-@router.post("/ingest-path", status_code=202)
+@router.post("/ingest-path", status_code=202, responses=json_response(IngestAcceptedResponse, 202))
 async def ingest_by_path(
     req: IngestPathRequest,
     background_tasks: BackgroundTasks,
@@ -290,7 +300,7 @@ async def ingest_by_path(
     return {"task_id": task_id, "status": "processing"}
 
 
-@router.post("/select-file")
+@router.post("/select-file", responses=json_response(SelectedFileResponse, 200))
 async def select_file_via_dialog(user: dict = Depends(get_current_user)):
     """Open a native Windows file dialog to let the user select a file on their disk."""
     import subprocess
@@ -317,7 +327,7 @@ async def select_file_via_dialog(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to open file dialog: {e}")
 
 
-@router.post("/ingest-text")
+@router.post("/ingest-text", responses=json_response(KnowledgeDocumentResponse, 200))
 async def ingest_text_api(req: IngestTextRequest, user: dict = Depends(get_current_user)):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="Content is empty")
