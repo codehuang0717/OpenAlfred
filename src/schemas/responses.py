@@ -7,6 +7,7 @@ stays in the existing services; contract tests validate representative outputs.
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
+from schemas.tool_display import ToolDisplay
 
 
 class StatusResponse(BaseModel):
@@ -102,7 +103,8 @@ class ThreadRenameResponse(StatusResponse, TitleResponse):
 class ToolCallResponse(BaseModel):
     id: str | None = None
     name: str
-    status: Literal["calling", "done"]
+    status: Literal["calling", "done", "running", "succeeded", "failed", "interrupted", "unknown"]
+    display: ToolDisplay | None = None
 
 
 class TextStep(BaseModel):

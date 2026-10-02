@@ -430,7 +430,7 @@ def format_weather_text(summary: dict, date: str | None = None) -> str:
 
     daily_lines = []
     for idx, day in enumerate(summary.get("daily_forecast", [])):
-        if date and date not in day.get("date", "") and idx > 0:
+        if date and date != day.get("date", ""):
             continue
         daily_lines.append(
             "- {day}: {weather}, {low}-{high}°C, 最高降水概率 {rain}%".format(

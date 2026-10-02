@@ -32,6 +32,7 @@ def should_continue(state: AgentState) -> Literal["tools", "extract_knowledge", 
 # ─── Graph Construction ───────────────────────────────────────────────────
 
 from tools import ALL_TOOLS
+from services.tool_observations import observe_tool_call
 
 
 def tool_error_message(error: Exception) -> str:
@@ -59,7 +60,7 @@ def tool_error_message(error: Exception) -> str:
     )
 
 
-tool_node = ToolNode(ALL_TOOLS, handle_tool_errors=tool_error_message)
+tool_node = ToolNode(ALL_TOOLS, handle_tool_errors=tool_error_message, awrap_tool_call=observe_tool_call)
 
 workflow = StateGraph(AgentState)
 

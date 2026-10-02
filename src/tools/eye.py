@@ -1,4 +1,5 @@
 import httpx
+from services.tool_observations import observed, failed, fields
 from utils.logger import get_logger
 from typing import Optional, List, Dict, Literal
 from datetime import datetime, timedelta, timezone
@@ -195,7 +196,10 @@ async def view_screen(
         elif mode == "time_range":
             user_timezone = runtime_timezone(runtime)
             if not start_time and not end_time:
-                return "Error: time_range mode requires at least one of start_time or end_time."
+                return failed(
+                    "Error: time_range mode requires at least one of start_time or end_time.",
+                    "缺少查询时间范围",
+                )
             resp = await _search_screenpipe(
                 user_id=user_id,
                 q=query or None,
@@ -208,7 +212,9 @@ async def view_screen(
 
         else:  # history — full-text search
             if not query:
-                return "Error: history mode requires a query string."
+                return failed(
+                    "Error: history mode requires a query string.", "缺少历史查询关键词"
+                )
             resp = await _search_screenpipe(
                 user_id=user_id,
                 q=query,
@@ -217,22 +223,38 @@ async def view_screen(
             )
 
         if "error" in resp:
-            return f"Screenpipe error: {resp['error']}"
+            return failed(f"Screenpipe error: {resp['error']}", "屏幕活动服务读取失败")
 
         items = resp.get("data", [])
         pagination = resp.get("pagination", {})
 
         if not items:
-            return "No results found."
+            return observed(
+                "No results found.", "所选范围内没有屏幕或音频活动", outcome="empty"
+            )
 
         lines = [_format_content_item(item) for item in items]
         lines.append("---")
         lines.append(_format_pagination(pagination))
 
-        return "\n".join(lines)
+        return observed(
+            "\n".join(lines),
+            f"读取到 {len(items)} 条屏幕或音频活动",
+            outcome="truncated"
+            if pagination.get("total", len(items)) > len(items)
+            else "completed",
+            details=fields(
+                匹配记录总数=pagination.get("total", len(items)),
+                本页数量=len(items),
+                记录="\n".join(_format_content_item(item) for item in items[:20]),
+                数据范围="最近 5 分钟记录，并非实时截图"
+                if mode == "current"
+                else "所选历史活动",
+            ),
+        )
 
     except Exception as e:
-        return f"Error querying screen data: {e}"
+        return failed(f"Error querying screen data: {e}", "屏幕活动查询失败")
 
 
 @tool
@@ -278,14 +300,18 @@ async def search_screen_time(
         )
 
         if "error" in resp:
-            return f"Screenpipe error: {resp['error']}"
+            return failed(f"Screenpipe error: {resp['error']}", "屏幕活动服务读取失败")
 
         items = resp.get("data", [])
         pagination = resp.get("pagination", {})
 
         if not items:
             time_desc = f"between {start_time} and {end_time or 'now'}"
-            return f"No screen/audio data found {time_desc}."
+            return observed(
+                f"No screen/audio data found {time_desc}.",
+                "所选时间段没有屏幕或音频活动",
+                outcome="empty",
+            )
 
         lines = [f"Results for time range: {start_time} → {end_time or 'now'}"]
         if query:
@@ -298,10 +324,22 @@ async def search_screen_time(
         lines.append("---")
         lines.append(_format_pagination(pagination))
 
-        return "\n".join(lines)
+        return observed(
+            "\n".join(lines),
+            f"读取到 {len(items)} 条时间段活动",
+            outcome="truncated"
+            if pagination.get("total", len(items)) > len(items)
+            else "completed",
+            details=fields(
+                时区=user_timezone,
+                匹配记录总数=pagination.get("total", len(items)),
+                本页数量=len(items),
+                记录="\n".join(_format_content_item(item) for item in items[:20]),
+            ),
+        )
 
     except Exception as e:
-        return f"Error querying screen data by time: {e}"
+        return failed(f"Error querying screen data by time: {e}", "时间段活动查询失败")
 
 
 screen_tools = [view_screen, search_screen_time]

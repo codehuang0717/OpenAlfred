@@ -10,10 +10,13 @@ from services.tts import save_tts_to_file
 # Import DB and utils functions
 from utils.time_utils import localize_to_utc
 from services.user_time import runtime_timezone
+from services.tool_observations import observed, failed, fields, action, changes
+from utils.time_utils import utc_to_local
 from utils.auth_utils import require_runtime_user_id
 from core.database import (
     add_reminder as db_add_reminder,
     get_all_reminders,
+    get_reminder_by_id,
     delete_reminder as db_delete_reminder,
     update_reminder as db_update_reminder,
     AUDIO_CACHE_DIR,
@@ -87,6 +90,11 @@ async def add_reminder(
             if not final_time_utc:
                 raise ValueError("Scheduled time cannot be empty")
         except Exception as e:
+            failed(
+                None,
+                "提醒时间无法解析，未创建提醒",
+                details=fields(处理建议="请指定有效日期、时间及用户时区"),
+            )
             return Command(update={"messages": [ToolMessage(content=f"ERROR: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
         audio_path = ""
@@ -111,7 +119,23 @@ async def add_reminder(
             audio_path=audio_path,
             user_id=user_id,
         )
-        
+
+        observed(
+            None,
+            f"已设置提醒：{title or body}",
+            outcome="partial"
+            if (call_greeting or delivery_method == "call") and not audio_path
+            else "completed",
+            details=fields(
+                内容=body,
+                触发时间=utc_to_local(final_time_utc, runtime_timezone(runtime)),
+                时区=runtime_timezone(runtime),
+                通知方式="电话" if delivery_method == "call" else "推送",
+                语音预渲染="已准备" if audio_path else "未准备",
+                说明="到时触发；此时尚未发送通知",
+            ),
+            actions=[action("panel", "查看提醒", "reminders", reminder_id)],
+        )
         return Command(
             update={
                 "reminders": await get_all_reminders(user_id=user_id),
@@ -124,6 +148,7 @@ async def add_reminder(
             }
         )
     except Exception as e:
+        failed(None, "设置提醒失败，未确认创建成功")
         return Command(update={"messages": [ToolMessage(content=f"ERROR: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
 @tool
@@ -170,8 +195,13 @@ async def list_reminders(
             reminders = filtered
         
         if not reminders:
-            return "当前没有任何提醒任务。"
-        
+            return observed(
+                "当前没有任何提醒任务。",
+                "所选范围内没有提醒",
+                outcome="empty",
+                actions=[action("panel", "查看提醒", "reminders")],
+            )
+
         # Separate into upcoming (unsent) and past (sent)
         upcoming = []
         past = []
@@ -204,10 +234,22 @@ async def list_reminders(
                 method = "📞电话" if r['delivery_method'] == "call" else "📱推送"
                 local_time = utc_to_local(r.get('scheduled_at', ''), user_timezone)
                 res += f"✅ [{r['id'][:8]}] {local_time}: {r['body']} ({method})\n"
-        
-        return res
+
+        return observed(
+            res,
+            f"{len(upcoming)} 条待触发，{len(past)} 条已处理",
+            details=fields(
+                时区=user_timezone,
+                提醒="\n".join(
+                    f"{r.get('title') or r['body']} · {utc_to_local(r['scheduled_at'], user_timezone)} · {'已处理' if r['sent'] else '待触发'}"
+                    for r in upcoming + past
+                ),
+            ),
+            actions=[action("panel", "查看提醒", "reminders")],
+        )
     except Exception as e:
-        return f"获取列表失败: {str(e)}"
+        return failed(f"获取列表失败: {str(e)}", "查询提醒失败")
+
 
 @tool
 async def update_reminder(
@@ -224,23 +266,45 @@ async def update_reminder(
         if len(id) == 8:
             all_r = await get_all_reminders(user_id=user_id)
             matches = [r for r in all_r if r['id'].startswith(id)]
-            if not matches: 
-                return Command(update={"messages": [ToolMessage(content="ERROR: 未找到匹配的提醒。", tool_call_id=runtime.tool_call_id)]})
+            if len(matches) != 1:
+                failed(
+                    None,
+                    "提醒不存在或短 ID 匹配多个对象，本次未执行",
+                    details=fields(处理建议="刷新提醒列表，重新选择具体提醒"),
+                )
+                raise ValueError("提醒不存在或短 ID 匹配不唯一，请使用完整 ID")
             id = matches[0]['id']
 
+        before = await get_reminder_by_id(id, user_id=user_id)
+        if not before:
+            failed(None, "提醒不存在或不属于当前用户，本次未修改")
+            raise ValueError("提醒不存在或不属于当前用户")
         # 如果修改时间，需要解析
         final_time_utc = None
         if scheduled_at:
             final_time_utc = localize_to_utc(scheduled_at, runtime_timezone(runtime))
 
-        await db_update_reminder(
-            id=id,
-            user_id=user_id,
-            scheduled_at=final_time_utc,
-            title=title,
-            body=body
+        updated = await db_update_reminder(
+            id=id, user_id=user_id, scheduled_at=final_time_utc, title=title, body=body
         )
-
+        if updated is False:
+            raise ValueError("提醒不存在或不属于当前用户")
+        after = await get_reminder_by_id(id, user_id=user_id)
+        delta = changes(
+            before,
+            after,
+            {"title": "标题变更", "body": "内容变更", "scheduled_at": "触发时间变更"},
+            user_timezone=runtime_timezone(runtime),
+        )
+        observed(
+            None,
+            f"已修改提醒：{after.get('title') or after['body']}"
+            if delta
+            else "提醒内容没有变化",
+            outcome="completed" if delta else "no_change",
+            details=delta + fields(时区=runtime_timezone(runtime)),
+            actions=[action("panel", "查看提醒", "reminders", id)],
+        )
         return Command(
             update={
                 "reminders": await get_all_reminders(user_id=user_id),
@@ -253,6 +317,7 @@ async def update_reminder(
             }
         )
     except Exception as e:
+        failed(None, "修改提醒失败，未确认变更成功")
         return Command(update={"messages": [ToolMessage(content=f"更新失败: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
 @tool
@@ -264,11 +329,31 @@ async def cancel_reminder(runtime: ToolRuntime, id: str) -> Command:
         if len(id) == 8:
             all_r = await get_all_reminders(user_id=user_id)
             matches = [r for r in all_r if r['id'].startswith(id)]
-            if not matches: 
-                return Command(update={"messages": [ToolMessage(content="ERROR: 未找到匹配的提醒。", tool_call_id=runtime.tool_call_id)]})
+            if len(matches) != 1:
+                failed(
+                    None,
+                    "提醒不存在或短 ID 匹配多个对象，本次未执行",
+                    details=fields(处理建议="刷新提醒列表，重新选择具体提醒"),
+                )
+                raise ValueError("提醒不存在或短 ID 匹配不唯一，请使用完整 ID")
             id = matches[0]['id']
-            
-        await db_delete_reminder(id, user_id=user_id)
+
+        before = await get_reminder_by_id(id, user_id=user_id)
+        if not before or not await db_delete_reminder(id, user_id=user_id):
+            failed(None, "提醒不存在或不属于当前用户，本次未取消")
+            raise ValueError("提醒不存在或不属于当前用户")
+        observed(
+            None,
+            f"已取消提醒：{before.get('title') or before['body']}",
+            details=fields(
+                原内容=before["body"],
+                原触发时间=utc_to_local(
+                    before["scheduled_at"], runtime_timezone(runtime)
+                ),
+                时区=runtime_timezone(runtime),
+            ),
+            actions=[action("panel", "查看提醒", "reminders")],
+        )
         return Command(
             update={
                 "reminders": await get_all_reminders(user_id=user_id),
@@ -281,6 +366,7 @@ async def cancel_reminder(runtime: ToolRuntime, id: str) -> Command:
             }
         )
     except Exception as e:
+        failed(None, "取消提醒失败，未确认取消成功")
         return Command(update={"messages": [ToolMessage(content=f"取消失败: {str(e)}", tool_call_id=runtime.tool_call_id)]})
 
 

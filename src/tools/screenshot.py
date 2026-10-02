@@ -1,6 +1,8 @@
 import base64
 import io
 import logging
+from datetime import datetime, timezone
+from services.tool_observations import observed, failed, fields
 from PIL import ImageGrab
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
@@ -21,6 +23,7 @@ async def take_screenshot(query: str, runtime: ToolRuntime) -> str:
         require_screen_owner(require_runtime_user_id(runtime))
         # Capture screen
         img = ImageGrab.grab()
+        captured_at = datetime.now(timezone.utc).isoformat()
         buffered = io.BytesIO()
         # Convert to RGB to avoid alpha channel issues with JPEG
         if img.mode != 'RGB':
@@ -50,9 +53,20 @@ async def take_screenshot(query: str, runtime: ToolRuntime) -> str:
         text = str(response.text)
         if not text:
             raise RuntimeError("Vision model returned no text answer")
-        return text
+        return observed(
+            text,
+            "已分析本次屏幕截图",
+            details=fields(
+                截取时间=captured_at,
+                分析结果=text,
+                说明="仅返回分析文字，没有保存可回放的截图",
+            ),
+        )
     except Exception as e:
         logger.error(f"Screenshot tool failed: {e}")
-        return f"Failed to capture or analyze screen: {str(e)}"
+        return failed(
+            f"Failed to capture or analyze screen: {str(e)}", "屏幕截取或分析失败"
+        )
+
 
 screenshot_tools = [take_screenshot]

@@ -9,6 +9,7 @@ from core.config import config
 from routers.auth import get_current_user, security
 from services.coding_task_reference import coding_task_reference
 from services.email_draft_reference import email_draft_reference
+from services.tool_observations import display_from_artifact
 
 from schemas.responses import (
     ChatMessageResponse,
@@ -257,7 +258,7 @@ async def get_thread_messages(
                 entry = {
                     "id": tc.get("id") or "",
                     "name": name,
-                    "status": "done",
+                    "status": "unknown",
                 }
                 tools_step.append(entry)
                 current_ai_msg["tools"].append(entry)
@@ -268,7 +269,15 @@ async def get_thread_messages(
                     "tools": tools_step,
                 })
 
-        elif msg_type == "tool" and current_ai_msg and msg.get("status") != "error":
+        elif msg_type == "tool" and current_ai_msg:
+            display = display_from_artifact(msg.get("artifact"))
+            for entry in current_ai_msg["tools"]:
+                if entry["id"] == msg.get("tool_call_id"):
+                    entry["status"] = display["status"] if display else "failed" if msg.get("status") == "error" else "unknown"
+                    if display:
+                        entry["display"] = display
+            if msg.get("status") == "error":
+                continue
             if msg.get("name") in {"create_email_draft", "update_email_draft"}:
                 draft = email_draft_reference(msg.get("content"))
                 paired = any(

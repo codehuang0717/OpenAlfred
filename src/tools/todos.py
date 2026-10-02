@@ -13,6 +13,8 @@ from core.database import (
     update_todo as db_update_todo,
     delete_todo as db_delete_todo,
 )
+from db.todo import get_todo_by_id
+from services.tool_observations import observed, fields, changes, action
 
 
 async def _get_user_id(runtime: ToolRuntime) -> str:
@@ -91,8 +93,24 @@ async def get_todos(
             t['scheduled_start_at'] = utc_to_local(t['scheduled_start_at'], user_timezone)
         if t.get('expected_completion_at'):
             t['expected_completion_at'] = utc_to_local(t['expected_completion_at'], user_timezone)
-    
-    return todos
+
+    pending = sum(t.get("status") == "pending" for t in todos)
+    return observed(
+        todos,
+        f"找到 {len(todos)} 项待办，待完成 {pending} 项",
+        outcome="completed" if todos else "empty",
+        details=fields(
+            结果数量=len(todos),
+            待完成=pending,
+            已完成=sum(t.get("status") == "completed" for t in todos),
+            用户时区=user_timezone,
+            待办列表="\n".join(
+                f"{t.get('title') or '无标题'} · {t.get('status') or '未记录状态'} · 开始：{t.get('scheduled_start_at') or '未设置'} · 截止：{t.get('expected_completion_at') or '未设置'}"
+                for t in todos
+            ),
+        ),
+        actions=[action("panel", "查看待办", "todos")],
+    )
 
 
 @tool
@@ -125,6 +143,20 @@ async def add_todo(
         user_id=user_id,
     )
 
+    observed(
+        None,
+        f"已创建「{title}」",
+        details=fields(
+            标题=title,
+            描述=description,
+            备注=notes,
+            开始时间=formatted_start_time or "未设置",
+            截止时间=formatted_time or "未设置",
+            用户时区=user_timezone,
+        ),
+        actions=[action("panel", "打开待办", "todos", id)],
+    )
+
     return Command(
         update={
             "todos": await get_all_todos(user_id=user_id),
@@ -152,7 +184,9 @@ async def update_todo(
 ) -> Command:
     """Update an existing todo by ID."""
     user_id = await _get_user_id(runtime)
-    
+    before = await get_todo_by_id(id, user_id=user_id)
+    if before is None:
+        raise ValueError("未找到要修改的待办")
     # Standardize time if provided
     user_timezone = runtime_timezone(runtime) if expected_completion_at or scheduled_start_at else None
     if expected_completion_at:
@@ -161,7 +195,7 @@ async def update_todo(
     if scheduled_start_at:
         scheduled_start_at = localize_to_utc(scheduled_start_at, user_timezone)
 
-    await db_update_todo(
+    updated = await db_update_todo(
         id=id,
         user_id=user_id,
         title=title,
@@ -173,12 +207,41 @@ async def update_todo(
         scheduled_start_at=scheduled_start_at,
     )
 
+    if updated is False:
+        raise ValueError("待办已不存在，本次未修改")
+    after = await get_todo_by_id(id, user_id=user_id)
+    if after is None:
+        raise ValueError("修改后无法核验待办，请刷新列表")
+    changed = changes(
+        before,
+        after,
+        {
+            "title": "标题",
+            "description": "描述",
+            "emoji": "标记",
+            "status": "状态",
+            "notes": "备注",
+            "expected_completion_at": "截止时间",
+            "scheduled_start_at": "开始时间",
+        },
+        user_timezone=runtime_timezone(runtime),
+    )
+    observed(
+        None,
+        f"已修改「{after['title']}」" if changed else f"「{after['title']}」没有变化",
+        outcome="completed" if changed else "no_change",
+        details=changed + fields(时区=runtime_timezone(runtime)),
+        actions=[action("panel", "查看待办", "todos", id)],
+    )
+
     return Command(
         update={
             "todos": await get_all_todos(user_id=user_id),
             "messages": [
                 ToolMessage(
-                    content=f"Successfully updated todo",
+                    content="Successfully updated todo"
+                    if changed
+                    else "No changes to todo",
                     tool_call_id=runtime.tool_call_id,
                 )
             ],
@@ -190,7 +253,22 @@ async def update_todo(
 async def delete_todo(runtime: ToolRuntime, id: str) -> Command:
     """Delete a todo by ID."""
     user_id = await _get_user_id(runtime)
-    await db_delete_todo(id, user_id=user_id)
+    before = await get_todo_by_id(id, user_id=user_id)
+    if before is None:
+        raise ValueError("未找到要删除的待办")
+    if not await db_delete_todo(id, user_id=user_id):
+        raise ValueError("待办已不存在，本次未删除")
+    observed(
+        None,
+        f"已删除「{before['title']}」",
+        details=fields(
+            标题=before["title"],
+            描述=before.get("description"),
+            开始时间=before.get("scheduled_start_at") or "未设置",
+            截止时间=before.get("expected_completion_at") or "未设置",
+        ),
+        actions=[action("panel", "查看待办列表", "todos")],
+    )
 
     return Command(
         update={

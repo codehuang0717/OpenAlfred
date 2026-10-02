@@ -7,6 +7,7 @@ from db.rag import get_image_by_id, get_document_by_id
 from logic.prompts import RAG_SEARCH_RESULT_HEADER
 import logging
 from utils.auth_utils import require_explicit_user_id, require_runtime_user_id
+from services.tool_observations import observed, failed, fields, action, clipped
 
 logger = logging.getLogger("rag-tools")
 
@@ -49,10 +50,15 @@ async def search_knowledge(runtime: ToolRuntime, query: str, top_k: int = 5) -> 
         results = rag_search(user_id, query, top_k)
     except Exception as e:
         logger.warning("search_knowledge error: %s", e)
-        return f"Knowledge search failed: {e}"
+        return failed(f"Knowledge search failed: {e}", "知识库检索失败")
 
     if not results:
-        return "No relevant documents found in your knowledge base."
+        return observed(
+            "No relevant documents found in your knowledge base.",
+            "未找到相关知识片段",
+            outcome="empty",
+            actions=[action("panel", "查看知识库", "knowledge")],
+        )
 
     # Cache document lookups for date info
     doc_cache: dict[str, str] = {}
@@ -74,7 +80,18 @@ async def search_knowledge(runtime: ToolRuntime, query: str, top_k: int = 5) -> 
         lines.append(block)
 
     results_text = "\n\n---\n\n".join(lines)
-    return RAG_SEARCH_RESULT_HEADER.format(results=results_text)
+    return observed(
+        RAG_SEARCH_RESULT_HEADER.format(results=results_text),
+        f"找到 {len(results)} 个片段，来自 {len({r.get('document_id') or r['filename'] for r in results})} 份文档",
+        details=[
+            {
+                "label": f"来源 {i}",
+                "value": f"{r['filename']} · {r.get('heading') or '无章节'}\n{clipped(r['content'], 2000)}",
+            }
+            for i, r in enumerate(results[:20], 1)
+        ],
+        actions=[action("panel", "查看知识库", "knowledge")],
+    )
 
 
 @tool
@@ -87,15 +104,30 @@ async def list_knowledge(runtime: ToolRuntime, query: str = "") -> str:
         docs = await db_list_documents(user_id)
     except Exception as e:
         logger.warning("list_knowledge error: %s", e)
-        return f"Failed to list documents: {e}"
+        return failed(f"Failed to list documents: {e}", "读取知识库文档列表失败")
 
     if not docs:
-        return "Your knowledge base is empty. You can upload documents to add knowledge."
+        return observed(
+            "Your knowledge base is empty. You can upload documents to add knowledge.",
+            "知识库暂无文档",
+            outcome="empty",
+            actions=[action("panel", "打开知识库", "knowledge")],
+        )
 
     lines = [f"Your knowledge base has {len(docs)} document(s):"]
     for d in docs:
         lines.append(f"- {d['title'] or d['filename']} ({d['file_type']}, {d['chunk_count']} chunks, added {d['created_at'][:10]})")
-    return "\n".join(lines)
+    return observed(
+        "\n".join(lines),
+        f"知识库共有 {len(docs)} 份文档",
+        details=fields(
+            文档="\n".join(
+                f"{d['title'] or d['filename']} · {d['file_type']} · {d['created_at'][:10]}"
+                for d in docs
+            )
+        ),
+        actions=[action("panel", "查看知识库", "knowledge")],
+    )
 
 
 def _get_rag_user_id(runtime: ToolRuntime) -> str:

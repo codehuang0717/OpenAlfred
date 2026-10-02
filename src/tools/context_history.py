@@ -2,6 +2,7 @@
 
 from langchain.tools import tool, ToolRuntime
 import tiktoken
+from services.tool_observations import observed, fields
 from core.config import config
 from logic.context_payload import payload, reference, serialize
 from utils.auth_utils import require_runtime_user_id, require_thread_id
@@ -39,7 +40,23 @@ def read_context_excerpt(ref: str, runtime: ToolRuntime, offset: int = 0, limit:
         result = serialize({"ref": ref, "offset": offset, "total_chars": len(text),
                             "excerpt": text[offset:end], "next_offset": end if end < len(text) else None})
         if len(encoding.encode(result, disallowed_special=())) <= config.CONTEXT_TOOL_RESULT_TOKENS - 200:
-            return result
+            return observed(
+                result,
+                f"已读取会话原文第 {offset + 1}–{end} 字符"
+                + ("，还有后续" if end < len(text) else "")
+                if end > offset
+                else "已到会话原文末尾，没有更多内容",
+                outcome="empty"
+                if end == offset
+                else "truncated"
+                if end < len(text)
+                else "completed",
+                details=fields(
+                    原文片段=text[offset:end],
+                    原文总字符=len(text),
+                    下一页起点=end if end < len(text) else "已到末尾",
+                ),
+            )
         if end - offset <= 1:
             raise ValueError("Tool-result budget too small for a history excerpt")
         end = offset + (end - offset) // 2

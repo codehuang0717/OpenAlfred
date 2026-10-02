@@ -1,4 +1,5 @@
 import os
+from services.tool_observations import observed, fields, action
 import asyncio
 import time
 import json
@@ -124,9 +125,27 @@ async def _send_call_fallback_bark(
     return success
 
 
-def _format_call_failure(reason: str, bark_sent: bool) -> str:
+def _format_call_failure(
+    reason: str,
+    bark_sent: bool,
+    *,
+    detail: str = "电话服务没有确认用户接听",
+    status: str = "failed",
+) -> str:
     fallback = "Bark fallback sent" if bark_sent else "Bark fallback failed"
-    return f"Call failed: {reason}. {fallback}."
+    return observed(
+        f"Call failed: {reason}. {fallback}.",
+        ("电话接通结果未确认" if status == "unknown" else "电话未接通")
+        + ("，备用推送已提交" if bark_sent else "，备用推送也失败"),
+        status=status,
+        outcome="partial" if bark_sent else "completed",
+        details=fields(
+            失败说明=detail,
+            备用通知="推送服务已接受，不代表用户已阅读" if bark_sent else "发送失败",
+            说明="不会自动重拨",
+        ),
+        actions=[action("panel", "查看通话记录", "calls")],
+    )
 
 
 async def _wait_for_outbound_answer(
@@ -268,7 +287,16 @@ async def dial_user(
                     room_name=room_name,
                 )
                 if answered:
-                    return f"Call answered ({target_number})"
+                    return observed(
+                        f"Call answered ({target_number})",
+                        "电话已接通",
+                        details=fields(
+                            目标号码=target_number,
+                            开场白=initial_speech,
+                            确认依据="电话服务已检测到用户接听",
+                        ),
+                        actions=[action("panel", "查看通话记录", "calls")],
+                    )
                 bark_sent = await _send_call_fallback_bark(
                     user_id=user_id,
                     target_number=target_number,
@@ -277,7 +305,15 @@ async def dial_user(
                     reminder_id=reminder_id,
                     supervisor_id=supervisor_id,
                 )
-                return _format_call_failure(answer_reason, bark_sent)
+                return _format_call_failure(
+                    answer_reason,
+                    bark_sent,
+                    detail={
+                        "sip.callStatus=busy": "对方忙线",
+                        "sip.callStatus=hangup": "对方已挂断",
+                        "sip.callStatus=failed": "电话服务报告接通失败",
+                    }.get(answer_reason, "等待接听期间没有确认用户接听"),
+                )
             reason = f"LiveKit SIP API {resp.status_code}: {resp.text}"
             bark_sent = await _send_call_fallback_bark(
                 user_id=user_id,
@@ -287,7 +323,11 @@ async def dial_user(
                 reminder_id=reminder_id,
                 supervisor_id=supervisor_id,
             )
-            return _format_call_failure(reason, bark_sent)
+            return _format_call_failure(
+                reason,
+                bark_sent,
+                detail=f"电话服务拒绝拨号请求（HTTP {resp.status_code}）",
+            )
     except Exception as e:
         reason = str(e)
         bark_sent = await _send_call_fallback_bark(
@@ -298,7 +338,13 @@ async def dial_user(
             reminder_id=reminder_id,
             supervisor_id=supervisor_id,
         )
-        return _format_call_failure(reason, bark_sent)
+        return _format_call_failure(
+            reason,
+            bark_sent,
+            detail="拨号过程中连接中断或服务异常，未确认接听结果",
+            status="unknown",
+        )
+
 
 async def _resolve_phone_number(user_id: str) -> str:
     """Resolve a dialable number for the given user.

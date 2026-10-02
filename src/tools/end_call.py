@@ -3,6 +3,7 @@
 from langchain.tools import ToolRuntime, tool
 
 from logic.voice_control import END_CALL_APPROVED
+from services.tool_observations import observed, fields
 from utils.auth_utils import require_runtime_user_id
 
 
@@ -17,7 +18,12 @@ async def request_end_call(runtime: ToolRuntime) -> str:
     if config.get("channel") != "voice" or config.get("call_type") not in {"inbound", "outbound"}:
         raise PermissionError("Only SIP voice calls can request a hangup")
     require_runtime_user_id(runtime)
-    return END_CALL_APPROVED
+    return observed(
+        END_CALL_APPROVED,
+        "已请求结束当前通话，等待实际挂断",
+        outcome="queued",
+        details=fields(说明="告别播报后会保留短暂追问时间；此时未确认挂断"),
+    )
 
 
 end_call_tools = [request_end_call]

@@ -19,6 +19,14 @@ from logic.agent_outcome import classify_response
 from logic.context_manager import ContextManager
 from services.code_apps import CodeAppSource, SYSTEM_PROMPT, validate_code_source
 from services.llm import output_limit_kwargs
+from services.tool_observations import (
+    observed,
+    failed,
+    fields,
+    input_display,
+    observe_tool_call,
+    display_from_artifact,
+)
 from utils.auth_utils import (
     MissingUserContextError, UserContextMismatchError, require_runtime_user_id,
 )
@@ -69,8 +77,13 @@ def tool_update(runtime: ToolRuntime, result: dict, **updates) -> Command:
 def list_files(runtime: ToolRuntime) -> dict:
     """List this coding task's source files and private read-result artifacts."""
     require_runtime_user_id(runtime)
-    return {"files": list(runtime.state.get("files", {})),
-            "data_results": list(runtime.state.get("private_results", {}))}
+    sources = list(runtime.state.get("files", {}))
+    data = list(runtime.state.get("private_results", {}))
+    return observed(
+        {"files": sources, "data_results": data},
+        f"{len(sources)} 个源码文件，{len(data)} 份只读数据",
+        details=fields(源码文件="、".join(sources) or "暂无", 只读数据数量=len(data)),
+    )
 
 
 @tool
@@ -90,6 +103,19 @@ def read_file(runtime: ToolRuntime, path: str, start_line: int = 1, line_count: 
     lines = text.splitlines()
     selected = "\n".join(lines[start_line - 1:start_line - 1 + line_count])
     end = start_char + char_count
+    observed(
+        None,
+        f"已读取 {path}" if path in FILES else "已读取任务私有数据片段",
+        outcome="truncated"
+        if end < len(selected) or start_line - 1 + line_count < len(lines)
+        else "completed",
+        details=fields(
+            行范围=f"{start_line}–{min(len(lines), start_line + line_count - 1)}",
+            字符数=len(selected[start_char:end]),
+            总行数=len(lines),
+            说明="仅当前任务文件，不是宿主机文件",
+        ),
+    )
     return {"path": path, "content": selected[start_char:end], "total_lines": len(lines),
             "next_char": end if end < len(selected) else None,
             "hash": hashlib.sha256(text.encode()).hexdigest()}
@@ -103,6 +129,16 @@ def write_file(runtime: ToolRuntime, path: str, content: str) -> Command:
         raise ValueError("只能写入 index.html、styles.css、app.js；不能写宿主机路径")
     if len(content) > 30000:
         raise ValueError("单文件不能超过 30000 字符")
+    previous = runtime.state.get("files", {}).get(path)
+    observed(
+        None,
+        f"已{'创建' if previous is None else '替换'} {path}",
+        details=fields(
+            原字符数=len(previous) if previous is not None else 0,
+            新字符数=len(content),
+            校验状态="修改后需重新验证",
+        ),
+    )
     return tool_update(runtime, {"written": path, "chars": len(content)},
                        files={path: content}, validation={})
 
@@ -122,6 +158,16 @@ def apply_patch(runtime: ToolRuntime, path: str, old: str, new: str, base_hash: 
     updated = original.replace(old, new, 1)
     if len(updated) > 30000:
         raise ValueError("修改后文件超过大小限制")
+    observed(
+        None,
+        f"已局部修改 {path}",
+        details=fields(
+            替换位置数=1,
+            删除片段=old[:2000],
+            新增片段=new[:2000],
+            校验状态="修改后需重新验证",
+        ),
+    )
     return tool_update(runtime, {"patched": path}, files={path: updated}, validation={})
 
 
@@ -134,11 +180,25 @@ async def validate_app(runtime: ToolRuntime) -> Command:
         source = source_from_files(files)
         report = await asyncio.to_thread(validate_code_source, source)
         report.update(source_hash=source_hash(files), private_data_tools=runtime.state.get("read_tools", []))
+        observed(
+            None,
+            "源码限制和 JavaScript 语法检查通过",
+            details=fields(
+                检查范围="源码安全策略、JavaScript 语法",
+                浏览器功能测试="未执行",
+                说明="尚未发布，需用户预览确认",
+            ),
+        )
         return tool_update(runtime, {"passed": True, "report": report}, validation=report)
     except (ValueError, RuntimeError, TimeoutError) as exc:
         failures = runtime.state.get("validation_failures", 0) + 1
         if failures > config.CODING_MAX_REPAIRS:
             raise RuntimeError("代码修复次数达到上限") from exc
+        failed(
+            None,
+            "源码检查未通过，需修复后再交付",
+            details=fields(诊断说明=str(exc), 检查范围="源码策略与 JavaScript 语法"),
+        )
         return tool_update(runtime, {"passed": False, "error": f"{type(exc).__name__}: {exc}"},
                            validation={}, validation_failures=failures)
 
@@ -152,6 +212,13 @@ def finish_task(runtime: ToolRuntime, summary: str) -> Command:
         raise ValueError("当前源码尚未通过验证，请先调用 validate_app")
     if not summary.strip() or len(summary) > 600:
         raise ValueError("完成报告必须是 1..600 字符，不能包含完整源码")
+    observed(
+        None,
+        "已交付待预览版本，尚未发布",
+        details=fields(
+            完成报告=summary, 语法与策略检查="已通过", 浏览器功能测试="未执行"
+        ),
+    )
     return tool_update(runtime, {"status": "ready", "summary": summary}, summary=summary.strip())
 
 
@@ -191,6 +258,7 @@ class CodingHarness(AgentMiddleware):
     def __init__(self, selection: str, on_progress):
         self.selection = selection
         self.on_progress = on_progress
+        self.observations = []
         self.model_calls = 0
         self.token_estimate = 0
         self.input_tokens = 0
@@ -200,6 +268,7 @@ class CodingHarness(AgentMiddleware):
 
     def restore_metrics(self, counters: dict) -> None:
         """Include reserved failed calls when a user resumes the same task."""
+        self.observations = counters.get("tool_observations", self.observations)[-40:]
         for attr, key in (("model_calls", "model_calls"), ("token_estimate", "token_upper_bound"),
                           ("input_tokens", "input_tokens"), ("output_tokens", "output_tokens")):
             setattr(self, attr, max(getattr(self, attr), counters.get(key) or 0))
@@ -257,6 +326,44 @@ class CodingHarness(AgentMiddleware):
 
     async def awrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
+        phase = (
+            "validation"
+            if name == "validate_app"
+            else "repairing"
+            if request.state.get("validation_failures", 0)
+            else "coding"
+        )
+        display = input_display(name, request.tool_call.get("args", {}))
+        await self.on_progress(
+            phase, display["title"] + " · " + display["summary"], self.metrics()
+        )
+        result = await observe_tool_call(
+            request, lambda req: self._execute_tool_call(req, handler)
+        )
+        messages = (
+            result.update.get("messages", [])
+            if isinstance(result, Command)
+            else [result]
+        )
+        for message in messages:
+            observation = display_from_artifact(message.artifact)
+            if observation:
+                # Private readers report scope and outcome only; never duplicate bodies into job metrics.
+                if name in self.read_names:
+                    observation = {**observation, "fields": [], "actions": []}
+                self.observations.append(
+                    {
+                        "id": request.tool_call["id"],
+                        "name": name,
+                        "display": observation,
+                    }
+                )
+                self.observations = self.observations[-40:]
+                await self.on_progress(phase, observation["summary"], self.metrics())
+        return result
+
+    async def _execute_tool_call(self, request, handler):
+        name = request.tool_call["name"]
         call_id = request.tool_call["id"]
         calls = request.state["messages"][-1].tool_calls
         if len(calls) != 1:
@@ -270,10 +377,6 @@ class CodingHarness(AgentMiddleware):
                 if type(count) is not int or not 1 <= count <= maximum:
                     return ToolMessage(content=f"{field} 必须是 1..{maximum} 的整数，请明确缩小读取范围。",
                                        tool_call_id=call_id, status="error")
-        phase = "validation" if name == "validate_app" else "coding"
-        if request.state.get("validation_failures", 0) and phase != "validation":
-            phase = "repairing"
-        await self.on_progress(phase, f"正在执行 {name}", self.metrics())
         try:
             result = await handler(request)
         except (MissingUserContextError, UserContextMismatchError):
@@ -308,9 +411,14 @@ class CodingHarness(AgentMiddleware):
         })
 
     def metrics(self) -> dict:
-        return {"model_calls": self.model_calls, "token_upper_bound": self.token_estimate,
-                "token_count_method": "cl100k_payload_estimate",
-                "input_tokens": self.input_tokens or None, "output_tokens": self.output_tokens or None}
+        return {
+            "tool_observations": self.observations,
+            "model_calls": self.model_calls,
+            "token_upper_bound": self.token_estimate,
+            "token_count_method": "cl100k_payload_estimate",
+            "input_tokens": self.input_tokens or None,
+            "output_tokens": self.output_tokens or None,
+        }
 
 
 def build_coding_agent(model, selection: str, checkpointer, on_progress):

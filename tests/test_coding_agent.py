@@ -105,6 +105,10 @@ class TestCodingAgent(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["validation"]["source_hash"], coder.source_hash(state["files"]))
         self.assertEqual(harness.model_calls, 5)
         self.assertIn("validation", stages)
+        observations = harness.metrics()["tool_observations"]
+        self.assertEqual(len(observations), 5)
+        self.assertTrue(all(item["display"]["status"] == "succeeded" for item in observations))
+        self.assertIn("未执行", str(observations[-1]["display"]["fields"]))
 
     async def test_failed_validation_is_observed_and_repaired(self):
         script = working_script()

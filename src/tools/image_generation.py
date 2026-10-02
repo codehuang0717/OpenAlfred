@@ -1,6 +1,8 @@
 """Image generation exposed to the agent with a small, persistent UI artifact."""
 
 from typing import Literal
+from openai import APIConnectionError, APITimeoutError
+from services.tool_observations import observed, fields
 
 from langchain.tools import ToolRuntime, tool
 
@@ -20,8 +22,23 @@ async def generate_image(
     The chat displays the result automatically. Do not invent image URLs or
     repeat the image as Markdown. This tool creates new images, not edits.
     """
-    artifact = await generate_image_for_user(require_runtime_user_id(runtime), prompt, size)
-    return "图片已生成并显示在本次聊天中。请简短回复，无需重复插入图片。", artifact
+    try:
+        artifact = await generate_image_for_user(
+            require_runtime_user_id(runtime), prompt, size
+        )
+    except (APIConnectionError, APITimeoutError):
+        observed(
+            None,
+            "生成连接中断，远端可能已处理，请核实后再尝试",
+            status="unknown",
+            details=fields(说明="可能已产生生成费用；不会自动重试"),
+        )
+        raise
+    return observed(
+        ("图片已生成并显示在本次聊天中。请简短回复，无需重复插入图片。", artifact),
+        "图片已生成，可在聊天中打开查看",
+        details=fields(描述=prompt, 请求尺寸=size, 说明="实际图片以预览为准"),
+    )
 
 
 image_tools = [generate_image]

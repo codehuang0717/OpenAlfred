@@ -261,7 +261,16 @@ async def _fetch_recent_for_account(creds: dict, limit: int) -> list:
             return results
     except Exception as e:
         logger.error("Error fetching from %s: %s", address, e, exc_info=True)
-        return []
+        raise EmailServiceException("邮箱读取失败，请检查连接和授权") from e
+
+
+class EmailBatch(list):
+    """Keep list callers compatible while exposing verified per-account coverage."""
+
+    def __init__(self, items: list, coverage: list[dict]):
+        super().__init__(items)
+        self.coverage = coverage
+
 
 async def get_recent_emails(user_id: str, limit: int = 10, account_ids: list[str] = None) -> list:
     """Fetches recent emails. If account_ids is None, fetches from all configured accounts."""
@@ -278,14 +287,25 @@ async def get_recent_emails(user_id: str, limit: int = 10, account_ids: list[str
         c["password"] = decrypt_password(c["encrypted_password"])
 
     tasks = [_fetch_recent_for_account(c, limit) for c in creds_list]
-    results = await asyncio.gather(*tasks)
-    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    coverage = []
     all_emails = []
-    for res in results:
-        all_emails.extend(res)
-        
+    for creds, result in zip(creds_list, results):
+        success = not isinstance(result, BaseException)
+        coverage.append(
+            {
+                "email": creds["email_address"],
+                "succeeded": success,
+                "count": len(result) if success else 0,
+            }
+        )
+        if success:
+            all_emails.extend(result)
+    if not any(item["succeeded"] for item in coverage):
+        raise EmailServiceException("所有邮箱均读取失败，请检查连接和授权")
     all_emails.sort(key=_date_sort_key, reverse=True)
-    return all_emails[:limit]
+    return EmailBatch(all_emails[:limit], coverage)
+
 
 async def read_email(user_id: str, email_id: str, account_id: str = None) -> dict:
     """Reads the full content of a specific email."""

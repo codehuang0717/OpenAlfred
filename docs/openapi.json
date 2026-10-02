@@ -2668,8 +2668,63 @@
         "title": "TokenResponse",
         "type": "object"
       },
+      "ToolAction": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "panel",
+              "email",
+              "email_draft",
+              "image",
+              "external",
+              "settings"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "title": "Label",
+            "type": "string"
+          },
+          "secondary": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary"
+          },
+          "target": {
+            "maxLength": 2048,
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "target"
+        ],
+        "title": "ToolAction",
+        "type": "object"
+      },
       "ToolCallResponse": {
         "properties": {
+          "display": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolDisplay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "anyOf": [
               {
@@ -2688,7 +2743,12 @@
           "status": {
             "enum": [
               "calling",
-              "done"
+              "done",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted",
+              "unknown"
             ],
             "title": "Status",
             "type": "string"
@@ -2699,6 +2759,130 @@
           "status"
         ],
         "title": "ToolCallResponse",
+        "type": "object"
+      },
+      "ToolDisplay": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ToolAction"
+            },
+            "maxItems": 10,
+            "title": "Actions",
+            "type": "array"
+          },
+          "elapsed_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed Ms"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ToolField"
+            },
+            "maxItems": 40,
+            "title": "Fields",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outcome": {
+            "default": "completed",
+            "enum": [
+              "completed",
+              "empty",
+              "no_change",
+              "exists",
+              "blocked",
+              "partial",
+              "queued",
+              "proposal",
+              "truncated"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 240,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 80,
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title",
+          "status",
+          "summary"
+        ],
+        "title": "ToolDisplay",
+        "type": "object"
+      },
+      "ToolField": {
+        "properties": {
+          "label": {
+            "maxLength": 80,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 5000,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "ToolField",
         "type": "object"
       },
       "ToolsStep": {
