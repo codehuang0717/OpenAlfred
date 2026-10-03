@@ -43,7 +43,7 @@ async def _push_int16_frames(source: rtc.AudioSource, pcm: bytes, interrupt_even
         pushed += len(chunk)
     return pushed
 
-async def play_tts(room: rtc.Room, text: str, interrupt_event: asyncio.Event, start_event: asyncio.Event = None) -> bool:
+async def play_tts(room: rtc.Room, text: str, interrupt_event: asyncio.Event, start_event: asyncio.Event = None, *, user_id: str) -> bool:
     """Generate and play TTS audio in the LiveKit room.
 
     If start_event is provided and not yet set, audio is prefetched in the
@@ -74,7 +74,8 @@ async def play_tts(room: rtc.Room, text: str, interrupt_event: asyncio.Event, st
         t_last_recv = t0
         underrun_warns = 0
 
-        async for audio_chunk in get_tts_stream(text, target_sample_rate=24000):
+        stream = get_tts_stream(text, target_sample_rate=24000, user_id=user_id)
+        async for audio_chunk in stream:
             if interrupt_event.is_set():
                 logger.info("[VoiceInterrupt] TTS audio playback aborted due to interrupt during stream.")
                 break
@@ -211,111 +212,56 @@ async def play_greeting(
     room: rtc.Room,
     initial_speech: str = "",
     interrupt_event: asyncio.Event = None,
-):
-    """Play the greeting. Prioritize pre-rendered wav if available, otherwise TTS."""
-    
-    # 1. Check for specific pre-rendered wav file first
-    wav_path = None
+    *, user_id: str,
+) -> None:
+    """Play only a cache matching this account's current voice and text."""
+    from pathlib import Path
+    from services.voice_store import get_voice_settings
+    from services.voice_cache import cached_voice, saved_voice
+
+    settings = await get_voice_settings(user_id)
+    if not settings.tts_enabled:
+        return
+    text = initial_speech.strip() or settings.greeting_text
+    alias = None
     if "outbound-reminder-" in room.name:
-        start_idx = room.name.find("outbound-reminder-") + len("outbound-reminder-")
-        reminder_id = room.name[start_idx : start_idx + 36]
-        specific_wav = os.path.join(AUDIO_CACHE_DIR, f"reminder_{reminder_id}.wav")
-        if os.path.exists(specific_wav):
-            wav_path = specific_wav
-            logger.info(f"Prioritizing specific reminder audio: {wav_path}")
+        reminder_id = room.name.split("outbound-reminder-", 1)[1][:36]
+        alias = Path(AUDIO_CACHE_DIR) / f"reminder_{reminder_id}.wav"
     elif "outbound-supervisor-" in room.name:
-        start_idx = room.name.find("outbound-supervisor-") + len("outbound-supervisor-")
-        end_idx = room.name.find("-", start_idx)
-        if end_idx != -1:
-            sup_id = room.name[start_idx : end_idx]
-            specific_wav = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{sup_id}.wav")
-            if os.path.exists(specific_wav):
-                wav_path = specific_wav
-                logger.info(f"Prioritizing pre-generated supervisor audio: {wav_path}")
-    
-    # 2. If wav exists, play it and return
-    if wav_path:
-        source = rtc.AudioSource(24000, 1)
-        track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
-        publication = await room.local_participant.publish_track(track)
-        try:
-            with wave.open(wav_path, "rb") as wf:
-                framerate = wf.getframerate()
-                audio_data = wf.readframes(wf.getnframes())
-
-            audio_np = np.frombuffer(audio_data, dtype=np.int16)
-            if framerate != 24000:
-                audio_np = np.interp(
-                    np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
-                    np.arange(len(audio_np)),
-                    audio_np,
-                ).astype(np.int16)
-
-            silence = np.zeros(24000 + 12000, dtype=np.int16)
-            chunk_size = 480
-            for i in range(0, len(silence), chunk_size):
-                chunk = silence[i : i + chunk_size]
-                if len(chunk) > 0:
-                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                    await source.capture_frame(frame)
-
-            for i in range(0, len(audio_np), chunk_size):
-                chunk = audio_np[i : i + chunk_size]
-                if len(chunk) > 0:
-                    frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                    await source.capture_frame(frame)
-            await asyncio.sleep(len(audio_np) / 24000 + 0.5)
-        except Exception as e:
-            logger.error(f"Error in play_greeting (file): {e}")
-        finally:
-            await room.local_participant.unpublish_track(publication.sid)
+        supervisor_id = room.name.split("outbound-supervisor-", 1)[1].split("-", 1)[0]
+        alias = Path(AUDIO_CACHE_DIR) / f"supervisor_{supervisor_id}.wav"
+    path = None
+    if alias is not None:
+        saved = await saved_voice(user_id, alias)
+        if saved is not None:
+            text, path = saved
+    if path is None:
+        path = await cached_voice(user_id, text)
+    interrupt = interrupt_event if interrupt_event is not None else asyncio.Event()
+    if path is None:
+        logger.info("[greeting] current voice cache missing; synthesizing for account %s", user_id)
+        await play_tts(room, text, interrupt, user_id=user_id)
         return
 
-    # 3. Fallback: play_tts
-    if initial_speech:
-        logger.info(f"Playing initial speech via TTS: {initial_speech}")
-        await play_tts(room, initial_speech, interrupt_event or asyncio.Event())
-        return
+    def read() -> bytes:
+        with wave.open(str(path), "rb") as audio:
+            if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (24000, 1, 2):
+                raise ValueError("Invalid cached voice audio format")
+            return audio.readframes(audio.getnframes())
 
-    # 4. Final fallback: default greeting.wav
-    wav_path = str(config.ASSETS_DIR / "greeting.wav")
-    if not os.path.exists(wav_path):
-        return
-
-    source = rtc.AudioSource(24000, 1)
+    pcm = await asyncio.to_thread(read)
+    source = _make_tts_source()
     track = rtc.LocalAudioTrack.create_audio_track("greeting", source)
     publication = await room.local_participant.publish_track(track)
-
     try:
-        with wave.open(wav_path, "rb") as wf:
-            framerate = wf.getframerate()
-            audio_data = wf.readframes(wf.getnframes())
-
-        audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if framerate != 24000:
-            audio_np = np.interp(
-                np.linspace(0, len(audio_np) - 1, int(len(audio_np) * (24000 / framerate))),
-                np.arange(len(audio_np)),
-                audio_np,
-            ).astype(np.int16)
-
-        silence = np.zeros(24000 + 12000, dtype=np.int16)
-        chunk_size = 480
-        for i in range(0, len(silence), chunk_size):
-            chunk = silence[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                await source.capture_frame(frame)
-
-        for i in range(0, len(audio_np), chunk_size):
-            chunk = audio_np[i : i + chunk_size]
-            if len(chunk) > 0:
-                frame = rtc.AudioFrame(data=chunk.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=len(chunk))
-                await source.capture_frame(frame)
-        await asyncio.sleep(len(audio_np) / 24000)
-    except Exception as e:
-        logger.error(f"Error in play_greeting: {e}")
+        # Preserve outbound SIP answer headroom. Incoming calls play immediately.
+        if room.name.startswith("outbound-"):
+            await _push_int16_frames(source, b"\x00\x00" * 36000, interrupt)
+        await _push_int16_frames(source, pcm, interrupt)
+        if not interrupt.is_set():
+            await source.wait_for_playout()
     finally:
+        source.clear_queue()
         await room.local_participant.unpublish_track(publication.sid)
 
 async def play_transition_audio(room: rtc.Room, interrupt_event: asyncio.Event, tool_name: str = None):

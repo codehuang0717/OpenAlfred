@@ -4,11 +4,14 @@ import httpx
 from utils.logger import get_logger
 from utils.latency import latency_tracker
 from core.config import config
+from services.voice_store import get_voice_settings
 
 logger = get_logger("livekit-stt")
 
-async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int) -> str:
+async def transcribe_audio(audio_data: bytes, sample_rate: int, channels: int, user_id: str) -> str:
     """Send audio data to the SenseVoice service for transcription."""
+    if not (await get_voice_settings(user_id)).stt_enabled:
+        return ""
     latency_tracker.start("stt_total")
     wav_io = io.BytesIO()
     with wave.open(wav_io, "wb") as wav_file:

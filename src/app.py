@@ -20,6 +20,9 @@ from services.email_worker import EmailWorker
 from routers import email_workflow
 from routers import auth, todos, reminders, threads, calls, email, settings, multimodal, events, rag, memory, user_apps
 from routers import generated_images
+from routers import voice
+from services.voice_runtime import voice_manager
+from services.voice_cache import greeting_cache
 
 from utils.logger import setup_logging, get_logger
 
@@ -39,12 +42,15 @@ async def lifespan(app: FastAPI):
         await coding_worker.start()
         app.state.coding_worker = coding_worker
         await email_worker.start()
+        await voice_manager.initialize()
         app.state.email_worker = email_worker
         logger.info("Database initialized. EventBus connected.")
         from rag.embedding import get_embedding_model
         threading.Thread(target=get_embedding_model, daemon=True, name="embed-warmup").start()
         yield
     finally:
+        await greeting_cache.close()
+        await voice_manager.close()
         await email_worker.close()
         await coding_worker.close()
         await event_bus.close()
@@ -92,6 +98,7 @@ app.include_router(rag.images_router)
 app.include_router(memory.router)
 app.include_router(user_apps.router)
 app.include_router(generated_images.router)
+app.include_router(voice.router)
 
 # --- Static Files ---
 

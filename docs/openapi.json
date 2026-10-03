@@ -157,6 +157,32 @@
         "title": "Body_upload_file_api_rag_upload_post",
         "type": "object"
       },
+      "Body_upload_voice_profile_api_voice_profiles_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "title": "Name",
+            "type": "string"
+          },
+          "transcript": {
+            "maxLength": 2000,
+            "title": "Transcript",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "transcript",
+          "file"
+        ],
+        "title": "Body_upload_voice_profile_api_voice_profiles_post",
+        "type": "object"
+      },
       "CallThreadResponse": {
         "properties": {
           "created_at": {
@@ -1968,6 +1994,87 @@
         "title": "QueuedRevisionResponse",
         "type": "object"
       },
+      "QwenOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_size": {
+            "default": 10,
+            "maximum": 48.0,
+            "minimum": 1.0,
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "language": {
+            "default": "Auto",
+            "enum": [
+              "Auto",
+              "Chinese",
+              "English",
+              "Japanese",
+              "Korean",
+              "French",
+              "German",
+              "Italian",
+              "Portuguese",
+              "Russian",
+              "Spanish"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "max_new_tokens": {
+            "default": 1024,
+            "maximum": 2048.0,
+            "minimum": 128.0,
+            "title": "Max New Tokens",
+            "type": "integer"
+          },
+          "max_seq_len": {
+            "default": 2048,
+            "enum": [
+              2048,
+              4096
+            ],
+            "title": "Max Seq Len",
+            "type": "integer"
+          },
+          "repetition_penalty": {
+            "default": 1.05,
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Repetition Penalty",
+            "type": "number"
+          },
+          "temperature": {
+            "default": 0.9,
+            "maximum": 2.0,
+            "minimum": 0.1,
+            "title": "Temperature",
+            "type": "number"
+          },
+          "top_k": {
+            "default": 50,
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "top_p": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Top P",
+            "type": "number"
+          },
+          "xvec_only": {
+            "default": false,
+            "title": "Xvec Only",
+            "type": "boolean"
+          }
+        },
+        "title": "QwenOptions",
+        "type": "object"
+      },
       "RegisterRequest": {
         "properties": {
           "display_name": {
@@ -3364,6 +3471,360 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VoiceConfigResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/VoiceEngineInfo"
+            },
+            "title": "Engines",
+            "type": "array"
+          },
+          "greeting": {
+            "$ref": "#/components/schemas/VoiceGreetingStatus"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/VoiceProfile"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/VoiceRuntime"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/VoiceSettings"
+          }
+        },
+        "required": [
+          "settings",
+          "runtime",
+          "engines",
+          "profiles",
+          "greeting"
+        ],
+        "title": "VoiceConfigResponse",
+        "type": "object"
+      },
+      "VoiceControl": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "start",
+              "stop",
+              "restart"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "VoiceControl",
+        "type": "object"
+      },
+      "VoiceEngineInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "id": {
+            "enum": [
+              "voxcpm",
+              "fasterqwentts"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "available"
+        ],
+        "title": "VoiceEngineInfo",
+        "type": "object"
+      },
+      "VoiceGreetingStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "state": {
+            "default": "missing",
+            "enum": [
+              "missing",
+              "generating",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "title": "VoiceGreetingStatus",
+        "type": "object"
+      },
+      "VoicePreview": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoicePreview",
+        "type": "object"
+      },
+      "VoiceProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "default": false,
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "duration": {
+            "title": "Duration",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "transcript": {
+            "title": "Transcript",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transcript",
+          "duration"
+        ],
+        "title": "VoiceProfile",
+        "type": "object"
+      },
+      "VoiceRuntime": {
+        "additionalProperties": false,
+        "properties": {
+          "engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "voxcpm",
+                  "fasterqwentts"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "restart_required": {
+            "default": false,
+            "title": "Restart Required",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "stopped",
+              "starting",
+              "running",
+              "stopping",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "VoiceRuntime",
+        "type": "object"
+      },
+      "VoiceSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "engine": {
+            "default": "fasterqwentts",
+            "enum": [
+              "voxcpm",
+              "fasterqwentts"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "greeting_text": {
+            "default": "Hello. 你好啊！老大。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Greeting Text",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "pattern": "^(builtin|[0-9a-f]{32})$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "builtin",
+            "title": "Profile Id"
+          },
+          "qwen": {
+            "$ref": "#/components/schemas/QwenOptions"
+          },
+          "qwen_model": {
+            "default": "1.7B",
+            "enum": [
+              "0.6B",
+              "1.7B"
+            ],
+            "title": "Qwen Model",
+            "type": "string"
+          },
+          "stt_enabled": {
+            "default": true,
+            "title": "Stt Enabled",
+            "type": "boolean"
+          },
+          "tts_enabled": {
+            "default": true,
+            "title": "Tts Enabled",
+            "type": "boolean"
+          },
+          "vox": {
+            "$ref": "#/components/schemas/VoxOptions"
+          }
+        },
+        "title": "VoiceSettings",
+        "type": "object"
+      },
+      "VoiceSpeech": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceSpeech",
+        "type": "object"
+      },
+      "VoxOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "cfg_value": {
+            "default": 2.0,
+            "maximum": 5.0,
+            "minimum": 0.5,
+            "title": "Cfg Value",
+            "type": "number"
+          },
+          "inference_timesteps": {
+            "default": 9,
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Inference Timesteps",
+            "type": "integer"
+          },
+          "normalize": {
+            "default": false,
+            "title": "Normalize",
+            "type": "boolean"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "title": "VoxOptions",
         "type": "object"
       },
       "WeatherLocationRequest": {
@@ -9510,6 +9971,628 @@
         "summary": "Create Responsive Revision",
         "tags": [
           "user-apps"
+        ]
+      }
+    },
+    "/api/voice/config": {
+      "get": {
+        "operationId": "get_voice_config_api_voice_config_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Voice Config",
+        "tags": [
+          "voice"
+        ]
+      },
+      "put": {
+        "operationId": "update_voice_config_api_voice_config_put",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Voice Config",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/preview": {
+      "post": {
+        "operationId": "voice_preview_api_voice_preview_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoicePreview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Voice Preview",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/profiles": {
+      "post": {
+        "operationId": "upload_voice_profile_api_voice_profiles_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_voice_profile_api_voice_profiles_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Voice Profile",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/profiles/{profile_id}": {
+      "delete": {
+        "operationId": "remove_voice_profile_api_voice_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove Voice Profile",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/profiles/{profile_id}/audio": {
+      "get": {
+        "operationId": "voice_reference_audio_api_voice_profiles__profile_id__audio_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Voice Reference Audio",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/runtime": {
+      "post": {
+        "operationId": "control_voice_runtime_api_voice_runtime_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceControl"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceRuntime"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Control Voice Runtime",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/speech": {
+      "post": {
+        "operationId": "voice_speech_api_voice_speech_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceSpeech"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "audio/pcm": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Voice Speech",
+        "tags": [
+          "voice"
         ]
       }
     },

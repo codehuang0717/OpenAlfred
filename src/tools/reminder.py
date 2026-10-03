@@ -30,13 +30,13 @@ def save_wav_blocking(path: str, data: bytes):
         wf.setframerate(48000)
         wf.writeframes(data)
 
-async def pre_render_tts(text: str, filename: str) -> str:
+async def pre_render_tts(text: str, filename: str, user_id: str) -> str:
     """非阻塞预渲染 TTS，返回绝对路径"""
     try:
         print(f"[TTS] Generating TTS for: {text[:50]}...")
         out_path = os.path.join(AUDIO_CACHE_DIR, filename)
         
-        await save_tts_to_file(text, out_path)
+        await save_tts_to_file(text, out_path, user_id=user_id)
         
         if os.path.exists(out_path):
             file_size = os.path.getsize(out_path)
@@ -101,11 +101,11 @@ async def add_reminder(
         # 即使是普通提醒，我们也尝试预渲染，因为这样能确保调用 call_user 时的语音是“生成的”而不是默认音频文件
         if call_greeting:
             filename = f"reminder_{reminder_id}.wav"
-            audio_path = await pre_render_tts(call_greeting, filename)
+            audio_path = await pre_render_tts(call_greeting, filename, user_id)
         elif delivery_method == "call":
             # 如果是电话提醒但没有特定话术，至少使用 body 作为话术
             filename = f"reminder_{reminder_id}.wav"
-            audio_path = await pre_render_tts(body, filename)
+            audio_path = await pre_render_tts(body, filename, user_id)
 
         await db_add_reminder(
             id=reminder_id,

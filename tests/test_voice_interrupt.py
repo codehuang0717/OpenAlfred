@@ -48,6 +48,7 @@ class TestVoiceInput(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_transcript_never_calls_agent(self):
         session = VoiceSession.__new__(VoiceSession)
+        session.user_id = "fixture"
         session.interrupt_event = asyncio.Event()
         with patch("livekit_service.session.transcribe_audio", new_callable=AsyncMock,
                    return_value=".") as stt, patch("livekit_service.session.call_agent") as agent:
@@ -66,6 +67,7 @@ class TestVoiceInput(unittest.IsolatedAsyncioTestCase):
 
         session = VoiceSession.__new__(VoiceSession)
         session.vad_stream = EventStream()
+        session.user_id = "fixture"
         session.end_call_countdown = SimpleNamespace(cancel=Mock())
         session.interrupt_event = asyncio.Event()
         session.current_response_task = None
@@ -85,11 +87,13 @@ class TestVoiceInput(unittest.IsolatedAsyncioTestCase):
 
         end_event = speech_event()
         start_event = SimpleNamespace(type=vad.VADEventType.START_OF_SPEECH)
-        with patch.object(session, "_handle_end_of_speech", side_effect=pending_response):
+        with patch.object(session, "_handle_end_of_speech", side_effect=pending_response), patch("livekit_service.session.get_voice_settings", AsyncMock(return_value=SimpleNamespace(stt_enabled=True))) as settings:
             loop_task = asyncio.create_task(session._vad_logic_loop())
             try:
+                await session.vad_stream.queue.put(SimpleNamespace(type=vad.VADEventType.INFERENCE_DONE))
                 await session.vad_stream.queue.put(end_event)
                 await asyncio.wait_for(started.wait(), timeout=0.2)
+                settings.assert_awaited_once_with("fixture")
                 await session.vad_stream.queue.put(start_event)
                 await asyncio.wait_for(cancelled.wait(), timeout=0.2)
                 self.assertTrue(session.interrupt_event.is_set())
@@ -126,7 +130,7 @@ class TestPlaybackInterrupt(unittest.IsolatedAsyncioTestCase):
                 patch("livekit_service.audio_playback._make_tts_source", return_value=source), \
                 patch("livekit_service.audio_playback.rtc.LocalAudioTrack.create_audio_track",
                       return_value=object()):
-            task = asyncio.create_task(play_tts(room, "正在说话", asyncio.Event()))
+            task = asyncio.create_task(play_tts(room, "正在说话", asyncio.Event(), user_id="fixture"))
             await asyncio.wait_for(waiting.wait(), timeout=0.2)
             task.cancel()
             self.assertFalse(await task)

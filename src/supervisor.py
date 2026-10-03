@@ -199,7 +199,7 @@ class ProactiveSupervisor:
                     supervisor_id = f"sup_{int(time.time())}"
                     wav_path = os.path.join(AUDIO_CACHE_DIR, f"supervisor_{supervisor_id}.wav")
                     logger.info(f"Pre-generating supervisor audio: {wav_path}")
-                    await save_tts_to_file(decision.call_greeting, wav_path)
+                    await save_tts_to_file(decision.call_greeting, wav_path, user_id=user_id)
                     prefs = await read_preferences(self.user_id)
                     if not prefs["recording_enabled"] or not prefs["smart_supervision_enabled"]:
                         return

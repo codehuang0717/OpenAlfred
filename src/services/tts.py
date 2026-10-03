@@ -1,40 +1,35 @@
 import httpx
-import json
-import asyncio
-import logging
-import wave
-import os
 import time
 import numpy as np
 from typing import AsyncGenerator
 from core.config import config
+from utils.auth_utils import mint_service_jwt, require_explicit_user_id
+from utils.logger import get_logger
 
-logger = logging.getLogger("tts-client")
+logger = get_logger("tts-client")
 
-async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGenerator[bytes, None]:
+async def get_tts_stream(text: str, target_sample_rate: int = 24000, *, user_id: str) -> AsyncGenerator[bytes, None]:
     """
-    Generate audio stream from local TTS service and resample to target_sample_rate.
+    Generate audio from the account's managed local TTS engine.
     Yields raw PCM chunks (int16).
     """
-    url = config.TTS_URL
-    payload = {
-        "model": config.TTS_MODEL,
-        "input": text,
-        "voice": config.TTS_VOICE,
-        "response_format": "pcm",
-        "stream": True
-    }
+    if target_sample_rate != 24000:
+        raise ValueError("TTS 输出固定为 24000Hz，不能直接重标采样率")
+    user_id = require_explicit_user_id(user_id)
+    url = f"{config.VOICE_API_URL}/api/voice/speech"
+    headers = {"Authorization": f"Bearer {mint_service_jwt(user_id)}"}
+    payload = {"text": text}
 
     try:
         t_prev = None
         received_audio = False
         timeout = httpx.Timeout(120.0, connect=10.0)
-        async with httpx.AsyncClient() as client:
-            async with client.stream("POST", url, json=payload, timeout=timeout) as response:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            async with client.stream("POST", url, json=payload, headers=headers, timeout=timeout) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
                     logger.error(f"TTS Request failed: {response.status_code}, {error_text}")
-                    return
+                    response.raise_for_status()
 
                 # PCM data from service is 16-bit LE, Mono
                 # Buffer for incomplete frames if needed, but PCM usually datang in chunks of bytes
@@ -65,36 +60,11 @@ async def get_tts_stream(text: str, target_sample_rate: int = 24000) -> AsyncGen
 
     except Exception as e:
         logger.error(f"Error in TTS streaming: {e}")
+        raise
 
-async def save_tts_to_file(text: str, output_path: str):
-    """
-    Generate full audio and save it as a WAV file.
-    Always saves at 24000Hz Mono for consistency with current system.
-    """
-    audio_chunks = []
-    # Add simple generator to verify data
-    async for chunk in get_tts_stream(text, target_sample_rate=24000):
-        # Debug: Check chunk size
-        # logger.info(f"DEBUG: TTS chunk size: {len(chunk)}")
-        audio_chunks.append(chunk)
-    
-    if not audio_chunks:
-        logger.error(f"Failed to generate audio for file: '{text[:20]}'")
-        return
-
-    # Debug: Print the path being used for saving
-    logger.info(f"DEBUG: Saving TTS audio to: {output_path}")
-
-    full_audio = b"".join(audio_chunks)
-    
-    def save_blocking():
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with wave.open(output_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(24000)
-            wf.writeframes(full_audio)
-            
-    await asyncio.to_thread(save_blocking)
-    logger.info(f"TTS saved to {output_path}")
+async def save_tts_to_file(text: str, output_path: str, *, user_id: str) -> None:
+    """Atomically save audio and its account/voice fingerprint metadata."""
+    from pathlib import Path
+    from services.voice_cache import render_cached_voice
+    await render_cached_voice(user_id, text, Path(output_path))
+    logger.info("TTS saved to %s", output_path)

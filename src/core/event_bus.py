@@ -40,6 +40,7 @@ class EventType(str, Enum):
     USER_APP_UPDATED = "user_app.updated"
     USER_APP_DELETED = "user_app.deleted"
     EMAIL_UPDATED = "email.updated"
+    VOICE_UPDATED = "voice.updated"
 
     # Supervisor events
     SUPERVISOR_STATE_CHANGED = "supervisor.state_changed"

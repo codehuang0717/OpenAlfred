@@ -11,6 +11,7 @@ from .stt import transcribe_audio
 from .agent_client import call_agent
 from .audio_playback import play_tts, play_transition_audio, play_transition_audio_loop
 from .end_call import EndCallCountdown
+from services.voice_store import get_voice_settings
 
 logger = get_logger("livekit-session")
 
@@ -136,6 +137,13 @@ class VoiceSession:
     async def _vad_logic_loop(self):
         """Processes VAD events and triggers agent responses."""
         async for event in self.vad_stream:
+            # Silero also emits inference ticks for every audio frame. Read
+            # account settings only at the boundaries that trigger an action.
+            if event.type not in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH):
+                continue
+            if not (await get_voice_settings(self.user_id)).stt_enabled:
+                self.is_speaking = False
+                continue
             if event.type == vad.VADEventType.START_OF_SPEECH:
                 self._handle_start_of_speech()
             elif event.type == vad.VADEventType.END_OF_SPEECH:
@@ -184,7 +192,7 @@ class VoiceSession:
         latency_tracker.end("vad_speech")
 
         # 1. Transcribe
-        text = (await transcribe_audio(audio_data, sample_rate, 1)).strip()
+        text = (await transcribe_audio(audio_data, sample_rate, 1, self.user_id)).strip()
         if not _has_words(text):
             logger.info("[voice-input] discarded non-lexical transcript: %r", text)
             latency_tracker.reset()
@@ -243,6 +251,7 @@ class VoiceSession:
                                 final_resp_text,
                                 interrupt_event,
                                 start_event=tts_start_event,
+                                user_id=self.user_id,
                             )
                         )
                     else:
@@ -251,6 +260,7 @@ class VoiceSession:
                                 self.room,
                                 final_resp_text,
                                 interrupt_event,
+                                user_id=self.user_id,
                             )
                         )
                     logger.info(f"[TIMING][Session] TTS_TASK_CREATED | dt={time.time() - t_msg:.3f}s")

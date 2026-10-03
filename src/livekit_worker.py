@@ -256,6 +256,7 @@ async def entrypoint(ctx: JobContext):
                     require_explicit_user_id(user_id)
                     await play_greeting(
                         room, current_speech, greeting_interrupt_event,
+                        user_id=user_id,
                     )
                 finally:
                     if session_obj and hasattr(session_obj, 'is_greeting_playing'):

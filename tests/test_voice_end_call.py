@@ -210,8 +210,8 @@ class TestTtsCompletion(unittest.IsolatedAsyncioTestCase):
         client = httpx.AsyncClient(transport=httpx.MockTransport(
             lambda _request: httpx.Response(200, content=b""),
         ))
-        with patch("services.tts.httpx.AsyncClient", return_value=client):
-            chunks = [chunk async for chunk in get_tts_stream("再见")]
+        with patch("services.tts.httpx.AsyncClient", return_value=client), patch("services.tts.mint_service_jwt", return_value="fixture-token"):
+            chunks = [chunk async for chunk in get_tts_stream("再见", user_id="fixture")]
         self.assertEqual(chunks, [])
 
     async def test_reports_success_only_after_source_queue_drains(self):
@@ -230,7 +230,7 @@ class TestTtsCompletion(unittest.IsolatedAsyncioTestCase):
         with patch("livekit_service.audio_playback.get_tts_stream", new=pcm_chunks), \
                 patch("livekit_service.audio_playback._make_tts_source", return_value=source), \
                 patch("livekit_service.audio_playback.rtc.LocalAudioTrack.create_audio_track", return_value=object()):
-            completed = await play_tts(room, "再见", asyncio.Event())
+            completed = await play_tts(room, "再见", asyncio.Event(), user_id="fixture")
         self.assertTrue(completed)
         source.wait_for_playout.assert_awaited_once()
         participant.unpublish_track.assert_awaited_once_with("track-1")

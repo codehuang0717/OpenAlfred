@@ -70,6 +70,11 @@ class Config:
     TTS_VOICE = os.getenv("TTS_VOICE", "yingxue")
     TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
     TTS_JITTER_BUFFER_MS = int(os.getenv("TTS_JITTER_BUFFER_MS", "80"))
+    VOXCPM_PROJECT = Path(os.getenv("VOXCPM_PROJECT", str(PROJECT_ROOT.parent / "VoxCPM")))
+    QWEN_TTS_PROJECT = Path(os.getenv("QWEN_TTS_PROJECT", str(PROJECT_ROOT.parent / "faster-qwen3-tts")))
+    VOICE_ENGINE_PORT = int(os.getenv("VOICE_ENGINE_PORT", "7027"))
+    VOICE_START_TIMEOUT = float(os.getenv("VOICE_START_TIMEOUT", "300"))
+    VOICE_API_URL = os.getenv("VOICE_API_URL", "http://127.0.0.1:7788")
 
     # JWT Authentication Settings
     JWT_SECRET = os.getenv("JWT_SECRET", "")
