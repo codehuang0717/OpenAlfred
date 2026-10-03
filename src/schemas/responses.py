@@ -394,6 +394,20 @@ class EmailContentResponse(EmailResponse):
     html_body: str
 
 
+class EmailAccountReadResponse(BaseModel):
+    account_id: str
+    email: str
+    succeeded: bool
+    count: int
+    error: str | None = None
+    error_code: str | None = None
+
+
+class EmailInboxResponse(BaseModel):
+    emails: list[EmailResponse]
+    accounts: list[EmailAccountReadResponse]
+
+
 class KnowledgeDocumentResponse(BaseModel):
     id: str
     user_id: str

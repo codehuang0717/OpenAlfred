@@ -16,6 +16,7 @@ from schemas.responses import (
     EmailConfigResponse,
     EmailConfigUpdateResponse,
     EmailContentResponse,
+    EmailInboxResponse,
     EmailResponse,
     StatusResponse,
     json_response,
@@ -48,10 +49,21 @@ async def get_recent_emails_api(user: dict = Depends(get_current_user)):
         emails = await get_recent_emails(user_id=user["id"], limit=15)
         return emails
     except EmailServiceException as e:
-        return []
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error fetching recent emails: {e}")
-        return []
+        raise HTTPException(status_code=502, detail="邮箱读取失败，请重试") from e
+
+
+@router.get("/emails/inbox", responses=json_response(EmailInboxResponse, 200))
+async def get_email_inbox_api(user: dict = Depends(get_current_user)):
+    """Return recent mail per account, including empty and failed accounts."""
+    from services.email import get_recent_emails
+
+    batch = await get_recent_emails(
+        user_id=user["id"], limit=15, per_account=True, allow_all_failed=True
+    )
+    return {"emails": list(batch), "accounts": batch.coverage}
 
 @router.get("/emails/{email_id}", responses=json_response(EmailContentResponse, 200))
 async def get_email_api(email_id: str, account_id: str, user: dict = Depends(get_current_user)):

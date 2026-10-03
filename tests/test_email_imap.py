@@ -65,6 +65,12 @@ class TestImapIdPayload(unittest.TestCase):
 
 
 class TestFetchParsing(unittest.TestCase):
+    def test_mixed_timezone_dates_can_be_sorted_across_accounts(self):
+        from services.email import _date_sort_key
+
+        rows = [{"date": "2026-10-02T00:00:00Z"}, {"date": "2025-01-01"}, {"date": "invalid"}]
+        self.assertEqual(sorted(rows, key=_date_sort_key, reverse=True), rows)
+
     def test_extract_header_literal(self):
         lines = [
             b"1 FETCH (BODY[HEADER.FIELDS (SUBJECT FROM DATE)] {32}",
@@ -95,6 +101,7 @@ class TestImapSessionOrder(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(result="OK", lines=[b"3 EXISTS"])
 
         fake = MagicMock()
+        fake._client_task = asyncio.create_task(asyncio.sleep(0))
         fake.wait_hello_from_server = AsyncMock(side_effect=lambda: order.append("hello"))
         fake.login = login
         fake.select = select
@@ -113,6 +120,135 @@ class TestImapSessionOrder(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(exists, 3)
 
         self.assertEqual(order, ["hello", "login", "cmd:ID", "select"])
+
+    async def test_connection_failure_is_reported_without_waiting_for_greeting(self):
+        from services.email import _imap_session, EmailServiceException
+
+        async def reset():
+            raise ConnectionResetError("private connection details")
+
+        fake = MagicMock()
+        fake._client_task = asyncio.create_task(reset())
+        fake.wait_hello_from_server = AsyncMock()
+        fake.login = AsyncMock()
+        fake.logout = AsyncMock()
+        fake.protocol.transport = None
+        with patch("services.email.aioimaplib.IMAP4_SSL", return_value=fake):
+            with self.assertRaises(EmailServiceException) as caught:
+                async with _imap_session("imap.163.com", 993, "user@163.com", "secret"):
+                    self.fail("A failed connection must not yield a session")
+        self.assertEqual(caught.exception.code, "connection_failed")
+        self.assertNotIn("private", str(caught.exception))
+        fake.wait_hello_from_server.assert_not_awaited()
+        fake.login.assert_not_awaited()
+        fake.logout.assert_not_awaited()
+        self.assertTrue(fake._client_task.done())
+
+    async def test_timeout_cancels_connection_task(self):
+        from services.email import _imap_session, EmailServiceException
+
+        fake = MagicMock()
+        fake._client_task = asyncio.create_task(asyncio.sleep(60))
+        fake.logout = AsyncMock()
+        fake.protocol.transport = None
+        with (
+            patch("services.email.aioimaplib.IMAP4_SSL", return_value=fake),
+            patch("services.email.IMAP_TIMEOUT", 0.01),
+        ):
+            with self.assertRaises(EmailServiceException) as caught:
+                async with _imap_session("imap.163.com", 993, "user@163.com", "secret"):
+                    self.fail("A timed out connection must not yield a session")
+        self.assertEqual(caught.exception.code, "timeout")
+        self.assertTrue(fake._client_task.cancelled())
+        fake.logout.assert_not_awaited()
+
+
+class TestAccountCoverage(unittest.IsolatedAsyncioTestCase):
+    async def test_inbox_route_includes_account_failures_for_current_user(self):
+        import httpx
+        from fastapi import FastAPI
+        from routers.email import router
+        from routers.auth import get_current_user
+        from schemas.responses import EmailInboxResponse
+        from services import email as service
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: {"id": "alice"}
+        batch = service.EmailBatch([], [{"account_id": "a", "email": "a@example.com", "succeeded": False, "count": 0, "error": "连接超时", "error_code": "timeout"}])
+        with patch.object(service, "get_recent_emails", AsyncMock(return_value=batch)) as fetch:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get("/api/emails/inbox")
+        self.assertEqual(response.status_code, 200)
+        data = EmailInboxResponse.model_validate(response.json())
+        self.assertEqual(data.accounts[0].error_code, "timeout")
+        fetch.assert_awaited_once_with(user_id="alice", limit=15, per_account=True, allow_all_failed=True)
+
+    async def test_legacy_recent_route_does_not_hide_a_read_failure(self):
+        from fastapi import HTTPException
+        from routers.email import get_recent_emails_api
+        from services import email as service
+
+        with patch.object(service, "get_recent_emails", AsyncMock(side_effect=service.EmailServiceException("连接超时"))):
+            with self.assertRaises(HTTPException) as caught:
+                await get_recent_emails_api({"id": "alice"})
+        self.assertEqual(caught.exception.status_code, 502)
+
+    async def test_inbox_preserves_older_account_mail_and_failure_details(self):
+        from services import email as service
+
+        accounts = [{"account_id": key, "email_address": key + "@example.com", "encrypted_password": "cipher"} for key in ("gmail", "qq", "163")]
+        recent = [{"id": str(n), "account_id": "gmail", "date": "2026-10-02T00:00:00+00:00"} for n in range(15)]
+        older = [{"id": "1", "account_id": "qq", "date": "2025-01-01T00:00:00+00:00"}]
+        with (
+            patch.object(service, "get_email_credentials", AsyncMock(return_value=accounts)),
+            patch.object(service, "decrypt_password", return_value="secret"),
+            patch.object(service, "_fetch_recent_for_account", AsyncMock(side_effect=[recent, older, service.EmailServiceException("连接被中断", code="connection_failed")])),
+        ):
+            batch = await service.get_recent_emails("alice", limit=15, per_account=True, allow_all_failed=True)
+        self.assertEqual(len(batch), 16)
+        self.assertEqual(batch[-1]["account_id"], "qq")
+        self.assertEqual([r["succeeded"] for r in batch.coverage], [True, True, False])
+        self.assertEqual(batch.coverage[-1]["error_code"], "connection_failed")
+        self.assertEqual(batch.coverage[-1]["error"], "连接被中断")
+        self.assertNotIn("password", accounts[0])
+
+    async def test_bad_credentials_do_not_block_other_accounts(self):
+        from services import email as service
+
+        accounts = [{"account_id": key, "email_address": key + "@example.com", "encrypted_password": key} for key in ("broken", "empty")]
+        with (
+            patch.object(service, "get_email_credentials", AsyncMock(return_value=accounts)),
+            patch.object(service, "decrypt_password", side_effect=[ValueError("secret"), "valid"]),
+            patch.object(service, "_fetch_recent_for_account", AsyncMock(return_value=[])),
+        ):
+            batch = await service.get_recent_emails("alice", allow_all_failed=True)
+        self.assertEqual(batch, [])
+        self.assertEqual(batch.coverage[0]["error_code"], "credentials_invalid")
+        self.assertTrue(batch.coverage[1]["succeeded"])
+
+    async def test_all_failed_inbox_returns_coverage(self):
+        from services import email as service
+
+        accounts = [{"account_id": "a", "email_address": "a@example.com", "encrypted_password": "cipher"}]
+        with (
+            patch.object(service, "get_email_credentials", AsyncMock(return_value=accounts)),
+            patch.object(service, "decrypt_password", return_value="secret"),
+            patch.object(service, "_fetch_recent_for_account", AsyncMock(side_effect=service.EmailServiceException("连接超时", code="timeout"))),
+        ):
+            batch = await service.get_recent_emails("alice", allow_all_failed=True)
+        self.assertEqual(batch, [])
+        self.assertEqual(batch.coverage[0]["error_code"], "timeout")
+
+    async def test_rejected_fetch_is_not_reported_as_an_empty_inbox(self):
+        from services.email import _fetch_headers, EmailServiceException
+
+        imap = MagicMock()
+        imap.fetch = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        with self.assertRaises(EmailServiceException) as caught:
+            await _fetch_headers(imap, "1")
+        self.assertEqual(caught.exception.code, "fetch_rejected")
+        self.assertEqual(imap.fetch.await_count, 2)
 
 
 if __name__ == "__main__":

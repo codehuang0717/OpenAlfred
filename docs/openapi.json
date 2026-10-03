@@ -914,6 +914,56 @@
         "title": "DraftUpdate",
         "type": "object"
       },
+      "EmailAccountReadResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account_id",
+          "email",
+          "succeeded",
+          "count"
+        ],
+        "title": "EmailAccountReadResponse",
+        "type": "object"
+      },
       "EmailConfigRequest": {
         "properties": {
           "account_id": {
@@ -1127,6 +1177,30 @@
           "draft"
         ],
         "title": "EmailDraftStep",
+        "type": "object"
+      },
+      "EmailInboxResponse": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/EmailAccountReadResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "emails": {
+            "items": {
+              "$ref": "#/components/schemas/EmailResponse"
+            },
+            "title": "Emails",
+            "type": "array"
+          }
+        },
+        "required": [
+          "emails",
+          "accounts"
+        ],
+        "title": "EmailInboxResponse",
         "type": "object"
       },
       "EmailResponse": {
@@ -5134,6 +5208,77 @@
           }
         ],
         "summary": "Delete Email Config Api",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/api/emails/inbox": {
+      "get": {
+        "description": "Return recent mail per account, including empty and failed accounts.",
+        "operationId": "get_email_inbox_api_api_emails_inbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailInboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Email Inbox Api",
         "tags": [
           "email"
         ]

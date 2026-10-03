@@ -45,7 +45,25 @@ def requires_imap_id(host: str, email_address: str = "") -> bool:
 
 
 class EmailServiceException(Exception):
-    pass
+    def __init__(self, message: str, *, code: str = "imap_error"):
+        super().__init__(message)
+        self.code = code
+
+
+def _imap_failure(error: Exception, stage: str) -> EmailServiceException:
+    """Expose actionable errors without returning credentials or server payloads."""
+    if isinstance(error, EmailServiceException):
+        return error
+    if isinstance(error, TimeoutError):
+        return EmailServiceException(
+            f"邮箱{stage}超时，请检查网络、代理规则和 IMAP 服务状态", code="timeout"
+        )
+    if isinstance(error, OSError):
+        return EmailServiceException(
+            f"邮箱{stage}失败：连接被中断或无法建立，请检查网络、代理规则和 IMAP 地址",
+            code="connection_failed",
+        )
+    return EmailServiceException(f"邮箱{stage}失败，请重试或检查邮箱设置")
 
 async def _get_credentials(user_id: str, account_id: str = None) -> dict:
     """Helper to fetch and decrypt email credentials for a given user."""
@@ -91,12 +109,13 @@ def _parse_email_date(date_str: str) -> str:
 def _date_sort_key(item: dict) -> datetime:
     raw = item.get("date") or ""
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except Exception:
         try:
-            return parsedate_to_datetime(raw)
+            parsed = parsedate_to_datetime(raw)
         except Exception:
             return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _extract_rfc822_bytes(lines) -> bytes:
@@ -160,29 +179,48 @@ async def _imap_session(
 ):
     imap = aioimaplib.IMAP4_SSL(host=host, port=port, timeout=IMAP_TIMEOUT)
     id_required = requires_imap_id(host, email_address)
+    stage = "连接"
+    authenticated = False
     try:
-        await imap.wait_hello_from_server()
+        # aioimaplib starts TCP/TLS in a separate task. Waiting only for its
+        # greeting hides connection exceptions and leaves failed tasks behind.
+        async with asyncio.timeout(IMAP_TIMEOUT):
+            await imap._client_task
+            await imap.wait_hello_from_server()
+        stage = "登录"
         login_resp = await imap.login(email_address, password)
         if login_resp.result != "OK":
             raise EmailServiceException(
-                f"IMAP login failed for {email_address}: {_response_text(login_resp)}"
+                "邮箱登录失败，请确认已开启 IMAP，并填写服务商要求的授权码或应用密码",
+                code="authentication_failed",
             )
+        authenticated = True
+        stage = "客户端认证"
         await _send_imap_id(imap, required=id_required)
 
         exists = None
         if select_inbox:
+            stage = "打开收件箱"
             select_resp = await imap.select("INBOX")
             if select_resp.result != "OK":
                 raise EmailServiceException(
-                    f"IMAP SELECT INBOX failed for {email_address}: {_response_text(select_resp)}"
+                    "邮箱拒绝打开收件箱，请检查 IMAP 权限和客户端授权",
+                    code="inbox_rejected",
                 )
             exists = extract_exists(select_resp) or 0
+        stage = "读取邮件"
         yield imap, exists
+    except Exception as error:
+        raise _imap_failure(error, stage) from error
     finally:
-        try:
-            await imap.logout()
-        except Exception:
-            logger.debug("IMAP logout failed for %s", email_address, exc_info=True)
+        if authenticated:
+            with suppress(Exception):
+                await asyncio.wait_for(imap.logout(), 2.0)
+        # Also close sockets and cancel pending TCP/TLS on timeout/cancellation.
+        imap._client_task.cancel()
+        await asyncio.gather(imap._client_task, return_exceptions=True)
+        if imap.protocol.transport is not None:
+            imap.protocol.transport.close()
 
 
 async def verify_account(imap_server, imap_port, smtp_server, smtp_port, email_address, password):
@@ -224,7 +262,7 @@ async def _fetch_headers(imap: aioimaplib.IMAP4, seq: str) -> bytes:
     if resp.result != "OK":
         resp = await imap.fetch(seq, "(RFC822.HEADER)")
     if resp.result != "OK":
-        return b""
+        raise EmailServiceException("邮箱服务器拒绝读取邮件头，请检查 IMAP 权限", code="fetch_rejected")
     return _extract_rfc822_bytes(resp.lines)
 
 async def _fetch_recent_for_account(creds: dict, limit: int) -> list:
@@ -245,8 +283,7 @@ async def _fetch_recent_for_account(creds: dict, limit: int) -> list:
             for num in range(exists, start - 1, -1):
                 raw_email = await _fetch_headers(imap, str(num))
                 if not raw_email:
-                    logger.warning("IMAP FETCH returned no headers for %s seq=%s", address, num)
-                    continue
+                    raise EmailServiceException("邮箱服务器返回空邮件头，请重试", code="empty_payload")
 
                 msg = email.message_from_bytes(raw_email)
                 results.append({
@@ -261,7 +298,7 @@ async def _fetch_recent_for_account(creds: dict, limit: int) -> list:
             return results
     except Exception as e:
         logger.error("Error fetching from %s: %s", address, e, exc_info=True)
-        raise EmailServiceException("邮箱读取失败，请检查连接和授权") from e
+        raise _imap_failure(e, "读取邮件") from e
 
 
 class EmailBatch(list):
@@ -272,10 +309,19 @@ class EmailBatch(list):
         self.coverage = coverage
 
 
-async def get_recent_emails(user_id: str, limit: int = 10, account_ids: list[str] = None) -> list:
+async def get_recent_emails(
+    user_id: str,
+    limit: int = 10,
+    account_ids: list[str] = None,
+    *,
+    per_account: bool = False,
+    allow_all_failed: bool = False,
+) -> list:
     """Fetches recent emails. If account_ids is None, fetches from all configured accounts."""
     creds_list = await get_email_credentials(user_id)
     if not creds_list:
+        if allow_all_failed:
+            return EmailBatch([], [])
         raise EmailServiceException("No email accounts configured for this user.")
         
     if account_ids:
@@ -283,28 +329,38 @@ async def get_recent_emails(user_id: str, limit: int = 10, account_ids: list[str
         if not creds_list:
             raise EmailServiceException(f"None of the specified accounts were found.")
 
-    for c in creds_list:
-        c["password"] = decrypt_password(c["encrypted_password"])
+    async def fetch_account(creds: dict) -> list:
+        try:
+            decrypted = {**creds, "password": decrypt_password(creds["encrypted_password"])}
+        except Exception as error:
+            raise EmailServiceException(
+                "保存的邮箱凭据无法解密，请在设置中重新连接此邮箱", code="credentials_invalid"
+            ) from error
+        return await _fetch_recent_for_account(decrypted, limit)
 
-    tasks = [_fetch_recent_for_account(c, limit) for c in creds_list]
+    tasks = [fetch_account(c) for c in creds_list]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     coverage = []
     all_emails = []
     for creds, result in zip(creds_list, results):
         success = not isinstance(result, BaseException)
+        failure = None if success else _imap_failure(result, "读取邮件")
         coverage.append(
             {
+                "account_id": creds["account_id"],
                 "email": creds["email_address"],
                 "succeeded": success,
                 "count": len(result) if success else 0,
+                "error": str(failure) if failure is not None else None,
+                "error_code": failure.code if failure is not None else None,
             }
         )
         if success:
             all_emails.extend(result)
-    if not any(item["succeeded"] for item in coverage):
+    if not allow_all_failed and not any(item["succeeded"] for item in coverage):
         raise EmailServiceException("所有邮箱均读取失败，请检查连接和授权")
     all_emails.sort(key=_date_sort_key, reverse=True)
-    return EmailBatch(all_emails[:limit], coverage)
+    return EmailBatch(all_emails if per_account else all_emails[:limit], coverage)
 
 
 async def read_email(user_id: str, email_id: str, account_id: str = None) -> dict:

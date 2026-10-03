@@ -69,6 +69,7 @@ async def get_recent_emails(
             details=display_fields(
                 邮箱范围="\n".join(
                     f"{item['email']} · {'成功' if item['succeeded'] else '读取失败'} · {item['count']} 封"
+                    + (f" · {item['error']}" if item.get("error") else "")
                     for item in coverage
                 )
                 or "服务未提供逐邮箱统计",
@@ -87,7 +88,8 @@ async def get_recent_emails(
                         content=json.dumps({
                             "type": "email_list",
                             "emails": emails,
-                            "accounts": accounts
+                            "accounts": accounts,
+                            "coverage": coverage,
                         }),
                         tool_call_id=runtime.tool_call_id,
                     )
