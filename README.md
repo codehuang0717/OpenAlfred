@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/screenshots/overview.png" alt="OpenAlfred" width="800">
-</p>
-
 <h1 align="center">OpenAlfred</h1>
 <p align="center">
   <strong>一个会主动找你、会记住你的习惯、为学生场景深度优化的 AI 私人助理</strong><br>
@@ -14,6 +10,14 @@
   <img src="https://img.shields.io/badge/Python-3.13+-blue?logo=python" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
+
+## 84 秒认识 OpenAlfred
+
+https://github.com/user-attachments/assets/31267eff-2887-4f7c-a29a-ec9956534ad5
+
+主动来电提醒、跨会话记忆、笔记原图引用，以及按需生成并留在工具箱里的小程序。
+
+> 网页与产品界面为实际录制；来电部分为场景演绎。
 
 ---
 
