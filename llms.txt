@@ -1,0 +1,41 @@
+# OpenAlfred
+
+> Open-source, self-hosted AI study assistant for students and self-learners; a proactive personal AI agent with long-term memory, multimodal RAG over personal notes, voice calls, email and task management, and AI-generated mini-apps. Built with Python, FastAPI, LangGraph, and LangChain; supports configured cloud LLMs and local Ollama models.
+
+Chinese name and search terms: OpenAlfred，开源 AI 私人助理，主动式智能体，长期记忆，图文知识库，学习助手，学生 AI 助手，大学生学习助手，课堂笔记问答，课件检索，备考复习，学习计划，作业截止提醒，专注监督，自托管，语音助手，自然语言生成小程序。
+
+## Project
+
+- [Repository and Chinese README](https://github.com/codehuang0717/OpenAlfred): features, product demo, architecture, and setup.
+- [English README](https://github.com/codehuang0717/OpenAlfred/blob/master/README.en.md): capabilities and deployment boundaries.
+- [Web frontend](https://github.com/codehuang0717/OpenAlfred-WebUI): separate web interface repository.
+- [License](https://github.com/codehuang0717/OpenAlfred#license): license declaration in the project README.
+
+## Capability map
+
+- Proactive AI agent: scheduled reminders and opt-in supervision using task context and recent screen activity. Push and SIP calls require configuration.
+- Long-term memory: user-scoped preferences, facts, habits, and relationship notes reused across conversations.
+- Multimodal RAG: Markdown / PDF knowledge retrieval with source references and original note images; personal knowledge base and study-assistant use cases.
+- Voice agent: STT → LLM → TTS with LiveKit and SIP, rather than a claim of native speech-to-speech inference.
+- Generative UI: natural-language generation of standalone browser mini-apps, followed by user preview and publishing to a personal toolbox.
+- Productivity: todos, reminders, IMAP / SMTP email, and reply drafts requiring confirmation before sending.
+- Image generation: new images from a configured image model, separate from original-image retrieval.
+- Model choice: configured OpenAI-compatible, DeepSeek, Gemini, Cerebras, and Ollama integrations; feature support varies by provider.
+
+## Student use cases and search vocabulary
+
+AI for students; student AI assistant; AI study assistant; study companion; lecture notes assistant; PDF Q&A; course notes; revision assistant; exam preparation; study planner; assignment deadline reminder; student productivity; academic task management; focus assistant; study accountability; AI study tools; Pomodoro timer; academic email workflow.
+
+## Implementation references
+
+- [Agent tools](https://github.com/codehuang0717/OpenAlfred/blob/master/src/tools/__init__.py): registered capabilities.
+- [Memory](https://github.com/codehuang0717/OpenAlfred/blob/master/src/tools/memory.py): long-term memory operations.
+- [Knowledge retrieval](https://github.com/codehuang0717/OpenAlfred/blob/master/src/tools/rag.py): document search and image restoration.
+- [Mini-app tools](https://github.com/codehuang0717/OpenAlfred/blob/master/src/tools/user_apps.py): standalone mini-apps and the separate todo-timeline panel.
+- [Mini-app generation](https://github.com/codehuang0717/OpenAlfred/blob/master/src/services/code_apps.py): generation and source validation.
+- [Voice calls](https://github.com/codehuang0717/OpenAlfred/blob/master/src/tools/call_user.py): SIP integration.
+- [Model providers](https://github.com/codehuang0717/OpenAlfred/blob/master/src/services/llm.py): cloud and local model integration.
+
+## Deployment context
+
+Self-hosted application and storage; cloud model requests still go to the configured provider. Windows desktop capture and voice components have platform-specific requirements. Standalone generated mini-apps do not directly access private mail, memory, host files, or the network. This file is a readable project summary, not an API specification or a guarantee of support by any crawler.

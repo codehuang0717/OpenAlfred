@@ -1,8 +1,14 @@
 <h1 align="center">OpenAlfred</h1>
 <p align="center">
-  <strong>一个会主动找你、会记住你的习惯、为学生场景深度优化的 AI 私人助理</strong><br>
-  主动型 · 带长期记忆 · 笔记可引用图片 · 全自部署
+  <strong>面向学生与自学者的开源 AI 学习助手：主动提醒、记住学习偏好、结合笔记原图答疑</strong><br>
+  主动提醒 · 长期记忆 · 图文 RAG 知识库 · 语音 Agent · 按需生成小程序
 </p>
+
+<p align="center">
+  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a> · <a href="llms.txt">Agent-readable overview</a>
+</p>
+
+**OpenAlfred is an open-source, self-hosted AI study assistant and proactive personal AI agent for students and self-learners**, with long-term memory, multimodal RAG, voice calls, email and task management, and AI-generated mini-apps. Built with LangGraph and FastAPI, it supports cloud LLMs and local models through Ollama.
 
 <p align="center">
   <img src="https://img.shields.io/badge/backend-FastAPI_+_LangGraph-009688?logo=fastapi" alt="Backend">
@@ -45,6 +51,38 @@ https://github.com/user-attachments/assets/31267eff-2887-4f7c-a29a-ec9956534ad5
 </table>
 
 ---
+
+## 为学生与自学者设计（AI for Students）
+
+如果你在找 **学生 AI 助手、大学生学习助手、AI study assistant、study companion**，OpenAlfred 把个人笔记问答、学习任务和主动提醒放进同一个助理。适用于课程学习、自学与复习，也可用于研究生的笔记整理和任务安排。
+
+| 学习场景 | 对应功能与英文检索词 |
+|---|---|
+| 课件和课堂笔记太多，想按自己的资料提问 | 上传 Markdown / PDF，检索原文与插图：**lecture notes assistant**, **PDF Q&A**, **course notes**, **personal knowledge base** |
+| 复习时想按自己的理解顺序讲解 | 结合已有笔记、原图和记住的偏好回答：**revision assistant**, **exam preparation**, **personalized learning** |
+| 作业、课程设计和论文节点容易忘 | 管理任务与定时提醒：**study planner**, **assignment deadline reminder**, **student productivity**, **academic task management** |
+| 打开电脑准备学习，结果一直刷视频 | 用户开启监督后，结合任务和屏幕活动提醒回到学习：**focus assistant**, **study accountability**, **proactive study reminders** |
+| 想给自己做一个小工具 | 用自然语言生成番茄钟、计算器或进度追踪器：**AI study tools**, **Pomodoro timer**, **AI-generated mini-apps** |
+| 导师或学校邮件容易漏看 | 查询邮件、整理内容并起草回复：**student email assistant**, **academic email workflow** |
+
+例如：“结合我上传的 PCA 笔记和原图，按推导顺序解释一遍。”“周五课程设计截止，提前提醒我。”“帮我做一个复习用的番茄钟。”
+
+## 你在寻找这样的 AI Agent 吗？
+
+OpenAlfred 面向希望自己部署个人 AI 助理、构建学习助手，或研究主动式 Agent 工作流的开发者。以下是常见的中英文检索方式，以及对应的实际功能：
+
+| 方向与常见关键词 | OpenAlfred 中的对应能力 |
+|---|---|
+| 主动式智能体 / **proactive AI agent**, **agentic AI**, personal AI assistant, JARVIS-style assistant | 在用户开启监督并配置提醒方式后，结合任务与屏幕活动触发提醒、推送或电话 |
+| 记忆型助手 / **long-term memory**, memory agent, personalized assistant | 保存用户偏好、事实与习惯，在后续会话中使用 |
+| 个人知识库 / **multimodal RAG**, retrieval-augmented generation, personal knowledge base | 检索 Markdown / PDF 笔记，返回文字、来源和笔记原图 |
+| 语音智能体 / **voice agent**, voice assistant, STT / TTS, LiveKit, SIP | 通过语音识别、LLM 与语音合成完成双向通话；电话服务需另行配置 |
+| 自托管助手 / **self-hosted AI assistant**, Ollama, local LLM | 自己运行应用与数据存储，选择本地或云端模型；选用云模型时相应请求仍会发往提供商 |
+| 生成式界面 / **generative UI**, AI mini-app generator, natural-language-to-app | 用自然语言生成计时器、计算器、小游戏等独立小程序，预览并确认发布到个人工具箱 |
+| 日常效率 / AI productivity assistant, email assistant, task management | 待办、定时提醒、IMAP / SMTP 邮件读取与回复草稿 |
+| 学习助手 / **AI study assistant**, student AI assistant, study planner | 结合个人笔记、学习偏好与任务安排辅助复习和管理截止日期 |
+
+这些方向描述项目用途；独立生成的小程序没有直接读取邮件、记忆或文件系统的权限。真实待办时间线使用单独的数据面板工具。
 
 ## 核心能力
 
@@ -146,6 +184,16 @@ SIP 协议接入，支持双向通话：
   <img src="assets/screenshots/summaryemail.png" width="45%" alt="邮件总结">
   <img src="assets/screenshots/draftemail.png" width="45%" alt="邮件草稿">
 </p>
+
+### 🧩 自然语言生成个人工具（Generative UI）
+
+描述你需要的工具，例如番茄钟、计算器、进度追踪器或小游戏，Alfred 会生成 HTML / CSS / JavaScript 小程序。先查看草稿预览，确认后再发布到右侧工具箱；已有工具可继续打开使用。
+
+这适合 **AI-generated apps**、**mini-app generation** 和 **natural-language UI generation** 场景。生成代码在受限的浏览器预览中运行，不会在宿主机上直接执行；它与使用真实待办的数据面板是两类工具。
+
+### 🎨 AI 图片生成与笔记原图引用
+
+除了从知识库引用已有图片，Alfred 也提供 **AI image generation** 工具，按文字要求调用已配置的图像模型生成新图片，并在聊天中展示。生成新图与检索笔记原图是独立能力。
 
 ### 🤖 多模型切换
 
