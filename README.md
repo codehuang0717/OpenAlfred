@@ -17,9 +17,9 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
-## 84 秒认识 OpenAlfred
+## 56 秒认识 OpenAlfred
 
-https://github.com/user-attachments/assets/31267eff-2887-4f7c-a29a-ec9956534ad5
+https://github.com/user-attachments/assets/53de2afe-2462-4919-a51d-6475712ece85
 
 主动来电提醒、跨会话记忆、笔记原图引用，以及按需生成并留在工具箱里的小程序。
 
